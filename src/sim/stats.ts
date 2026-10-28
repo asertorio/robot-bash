@@ -5,7 +5,6 @@ import { panelArea } from './geometry';
 import { RPM_TO_RADS } from './motor';
 
 export const GRAVITY = 9.81;
-const ELECTRONICS = { label: 'Speed controllers, radio & wiring', mass: 3, cost: 300, sourcing: 'common' as Sourcing, swapMinutes: 20 };
 const SPINNER_HUB = { mass: 1.5, cost: 120 };
 
 export interface BomLine {
@@ -36,7 +35,7 @@ export function billOfMaterials(d: RobotDesign): BomLine[] {
   }
   const b = lookup(BATTERIES, d.battery.part, 'battery');
   lines.push({ label: b.name, mass: b.mass, cost: b.cost, sourcing: b.sourcing, swapMinutes: b.swapMinutes });
-  lines.push({ ...ELECTRONICS });
+  lines.push(electronics(d));
   for (const w of d.weapons) {
     if (w.kind === 'flipper') {
       const ram = lookup(RAMS, w.ram, 'ram');
@@ -57,6 +56,13 @@ export function billOfMaterials(d: RobotDesign): BomLine[] {
     }
   }
   return lines;
+}
+
+/** Speed controllers, radio and wiring: sized by how much current the motors can pull. */
+export function electronics(d: RobotDesign): BomLine {
+  let amps = d.drive.motorsPerSide * 2 * lookup(MOTORS, d.drive.motor, 'motor').stallCurrent;
+  for (const w of d.weapons) if (w.kind === 'spinner') amps += lookup(MOTORS, w.motor, 'motor').stallCurrent;
+  return { label: 'Speed controllers, radio & wiring', mass: 0.6 + 0.008 * amps, cost: 100 + 0.7 * amps, sourcing: 'common', swapMinutes: 20 };
 }
 
 export function flipperPlateMass(w: FlipperDef): number {

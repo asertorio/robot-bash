@@ -16,6 +16,10 @@ export class MatchView {
   private trapdoor!: THREE.Mesh;
   private camTarget = new THREE.Vector3(0, 0, 0);
   private camPos = new THREE.Vector3(0, 12, 14);
+  /** 'tv' frames the fight; 'follow' orbits one robot (garage test bay). */
+  cameraMode: 'tv' | 'follow' = 'tv';
+  followIndex = 0;
+  private orbit = { yaw: 0.6, pitch: 0.55, dist: 3.2 };
   private sparks: THREE.Points;
   private sparkData: Array<{ p: THREE.Vector3; v: THREE.Vector3; life: number }> = [];
   private sparkPositions = new Float32Array(600 * 3);
@@ -42,6 +46,27 @@ export class MatchView {
     this.scene.add(this.sparks);
     this.resize();
     window.addEventListener('resize', () => this.resize());
+    this.bindOrbit(canvas);
+  }
+
+  /** Drag to orbit and wheel to zoom, in follow mode. */
+  private bindOrbit(canvas: HTMLCanvasElement) {
+    let drag: { x: number; y: number } | null = null;
+    canvas.addEventListener('pointerdown', (e) => {
+      // Clicking the arena hands the keyboard back to the robots.
+      (document.activeElement as HTMLElement | null)?.blur?.(); if (this.cameraMode === 'follow') { drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); } });
+    canvas.addEventListener('pointerup', () => (drag = null));
+    canvas.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      this.orbit.yaw -= (e.clientX - drag.x) * 0.008;
+      this.orbit.pitch = Math.min(1.4, Math.max(0.08, this.orbit.pitch + (e.clientY - drag.y) * 0.006));
+      drag = { x: e.clientX, y: e.clientY };
+    });
+    canvas.addEventListener('wheel', (e) => {
+      if (this.cameraMode !== 'follow') return;
+      e.preventDefault();
+      this.orbit.dist = Math.min(12, Math.max(1.2, this.orbit.dist * (1 + Math.sign(e.deltaY) * 0.1)));
+    }, { passive: false });
   }
 
   resize() {
@@ -228,6 +253,25 @@ export class MatchView {
 
   /** TV-style camera: high and to one side, drifting to keep both robots in frame. */
   private updateCamera(m: Match, dt: number) {
+    const k = 1 - Math.exp(-dt * 4);
+    if (this.cameraMode === 'follow') {
+      const r = m.robots[this.followIndex];
+      if (r) {
+        const p = r.position;
+        const target = new THREE.Vector3(p.x, Math.max(0, p.y) + 0.15, p.z);
+        const o = this.orbit;
+        const want = target.clone().add(new THREE.Vector3(Math.sin(o.yaw) * Math.cos(o.pitch), Math.sin(o.pitch), Math.cos(o.yaw) * Math.cos(o.pitch)).multiplyScalar(o.dist));
+        this.camTarget.lerp(target, k);
+        this.camPos.lerp(want, k);
+        this.camera.position.copy(this.camPos);
+        this.camera.lookAt(this.camTarget);
+      }
+      return;
+    }
+    this.tvCamera(m, dt);
+  }
+
+  private tvCamera(m: Match, dt: number) {
     const live = m.robots.filter((_, i) => !m.eliminated[i]);
     const focus = live.length ? live : m.robots;
     const mid = new THREE.Vector3();

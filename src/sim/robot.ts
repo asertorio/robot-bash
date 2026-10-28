@@ -7,7 +7,7 @@ import type { FlipperDef, RobotDesign, ShellPanel, SpinnerDef, Vec3 } from './de
 import { dist, panelArea, panelFaceArea, panelVertices } from './geometry';
 import { DEBRIS_GROUPS, GHOST_GROUPS, robotGroups, wheelBodyGroups, wheelTyreGroups } from './groups';
 import { dcMotor } from './motor';
-import { bladeProps, flipperNumbers, flipperPlateMass } from './stats';
+import { bladeProps, electronics, flipperNumbers, flipperPlateMass } from './stats';
 import { fromArr, mulberry32, qaxis, qconj, qmul, qrotate, twistAngle, vadd, vdot, vsub, type Q, type V3 } from './vmath';
 
 export type PartKind = 'panel' | 'wheel' | 'driveMotor' | 'battery' | 'electronics' | 'gas' | 'flipper' | 'spinner' | 'weaponMotor';
@@ -189,7 +189,7 @@ export class Robot {
     }
     this.batteryPart = ghost('battery', 'Battery', 'battery', design.battery.position, this.battery.mass);
     this.electronicsPart = ghost('electronics', 'Speed controllers & radio', 'electronics',
-      [design.battery.position[0], design.battery.position[1] + 0.02, design.battery.position[2] + 0.16], 3);
+      [design.battery.position[0], design.battery.position[1] + 0.02, design.battery.position[2] + 0.16], electronics(design).mass);
 
     // Wheels: own bodies on revolute joints so torque, grip and wheelspin are real.
     design.drive.wheels.forEach((w, i) => {

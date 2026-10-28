@@ -131,6 +131,16 @@ Part condition is internal state. The player sees it the way a builder would:
 in the commentary feed ("its left wheel has come off!") and in the pit damage
 report (OK / damaged / failing / destroyed), never as a health bar.
 
+## Scrutineering
+
+`src/sim/rules.ts` checks a design before it fights: weight class
+(featherweight 15 kg, lightweight 30 kg, middleweight 55 kg, heavyweight
+100 kg), optional budget (£1,500 / £3,000 / £5,000), a 1.5 m × 1.5 m size
+limit, armour clear of the floor, wheels on both sides, motor voltage vs.
+battery (over 1.6× is rejected), and spinner blades clear of the floor.
+Warnings cover a battery that won't last 3 minutes, battery-limited pushing,
+flipper plates that can't reach the floor, and very high ground clearance.
+
 ## Rules (per fight)
 
 - **Fight length:** 3 minutes (configurable).
@@ -186,8 +196,12 @@ of a full rebuild, and pit time per part.
    and gamepads, remappable controls and macros, CPU opponent.
 2. **Weapons & damage (v0.1, first pass):** flipper and spinner physics, part
    damage and failures, count, pit, out of arena, judges. Needs balancing.
-3. **Builder v1:** templates, parts catalogue, live stats, weight/cost classes,
-   test bay.
+3. **Builder v1 (done in v0.2):** templates and blank chassis, form-based
+   editing of armour panels, drive, battery and weapon; live stats and parts
+   list; scrutineering against weight class and budget; test bay with a crash
+   test dummy and telemetry; save, load, and JSON import/export. *Next for the
+   builder:* drag-and-drop placement in 3D, more weapon types (lifter, axe,
+   crusher, drum), and per-part cost/availability that feeds into repairs.
 4. **The show:** CPZs, house robots with AI, floor flipper, spikes, flame pit.
 5. **Tournament:** heats → final, side events (sumo, pinball, football,
    gauntlet, trials), pit repairs limited by time, budget and spares.

@@ -66,6 +66,8 @@ export class MacroRunner {
 /** Keyboard + gamepad state for the whole couch. */
 export class InputManager {
   private keys = new Set<string>();
+  /** Keys that went down since the last poll, so a quick tap is never missed. */
+  private tapped = new Set<string>();
   private pads: (Gamepad | null)[] = [];
   private runners: MacroRunner[] = [];
   private capture: ((b: Binding) => void) | null = null;
@@ -82,9 +84,13 @@ export class InputManager {
         else this.capture = null;
         return;
       }
-      if (this.boundCodes.has(e.code) && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) e.preventDefault();
+      // Typing in a text box shouldn't drive the robot.
+      const t = e.target;
+      if (t instanceof HTMLInputElement && t.type !== 'range' || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
+      if (this.boundCodes.has(e.code)) e.preventDefault();
       if (!e.repeat) this.pressed.push(e.code);
       this.keys.add(e.code);
+      this.tapped.add(e.code);
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('blur', () => this.keys.clear());
@@ -110,7 +116,7 @@ export class InputManager {
   }
 
   read: BindingReader = (b) => {
-    if (b.device === 'key') return this.keys.has(b.code) ? 1 : 0;
+    if (b.device === 'key') return this.keys.has(b.code) || this.tapped.has(b.code) ? 1 : 0;
     const pad = this.pads[b.pad];
     if (!pad) return 0;
     if (b.device === 'padButton') return pad.buttons[b.button]?.value ?? 0;
@@ -121,10 +127,12 @@ export class InputManager {
   poll(dtMs: number): ControlState[] {
     this.pads = navigator.getGamepads ? Array.from(navigator.getGamepads()) : [];
     if (this.capture) this.pollCapture();
-    return this.profiles.map((p, i) => {
+    const out = this.profiles.map((p, i) => {
       this.runners[i].update(p, this.read, dtMs);
       return mixControls(p, this.read, this.runners[i].active);
     });
+    this.tapped.clear();
+    return out;
   }
 
   /** Wait for the next key / button / stick push and hand it back as a Binding. */

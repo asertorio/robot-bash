@@ -1,13 +1,11 @@
 import type { RobotStats } from '../sim/stats';
 
-export const WEIGHT_LIMIT = 100;
-
 const n = (v: number, d = 0) => v.toLocaleString('en-GB', { minimumFractionDigits: d, maximumFractionDigits: d });
 
 /** Human-readable stat lines for a robot card: [label, value, isProblem]. */
-export function statLines(s: RobotStats): Array<[string, string, boolean?]> {
+export function statLines(s: RobotStats, weightLimit = 100): Array<[string, string, boolean?]> {
   const lines: Array<[string, string, boolean?]> = [
-    ['Weight', `${n(s.mass, 1)} kg of ${WEIGHT_LIMIT} kg`, s.mass > WEIGHT_LIMIT],
+    ['Weight', `${n(s.mass, 1)} kg of ${weightLimit} kg`, s.mass > weightLimit],
     ['Cost', `£${n(s.cost)}`],
     ['Top speed', `${n(s.topSpeed, 1)} m/s (${n(s.topSpeed * 2.237, 1)} mph)`],
     ['Pushing force', `${n(s.pushForce)} N (${s.pushLimit}-limited)`],

@@ -61,6 +61,10 @@ export interface TankSpec extends CatalogPart {
 }
 
 export const MOTORS: Record<string, MotorSpec> = {
+  dm250: {
+    id: 'dm250', name: 'DM-250 12V drive motor', mass: 1.0, cost: 70, sourcing: 'common', swapMinutes: 10,
+    voltage: 12, stallTorque: 1.8, freeSpeed: 5000, stallCurrent: 60, freeCurrent: 2,
+  },
   dm750: {
     id: 'dm750', name: 'DM-750 24V drive motor', mass: 2.6, cost: 180, sourcing: 'common', swapMinutes: 15,
     voltage: 24, stallTorque: 5.5, freeSpeed: 3200, stallCurrent: 140, freeCurrent: 4,
@@ -68,6 +72,10 @@ export const MOTORS: Record<string, MotorSpec> = {
   dm1200: {
     id: 'dm1200', name: 'DM-1200 36V drive motor', mass: 3.8, cost: 320, sourcing: 'specialist', swapMinutes: 20,
     voltage: 36, stallTorque: 9, freeSpeed: 3800, stallCurrent: 220, freeCurrent: 6,
+  },
+  wm400: {
+    id: 'wm400', name: 'WM-400 12V weapon motor', mass: 1.5, cost: 110, sourcing: 'common', swapMinutes: 15,
+    voltage: 12, stallTorque: 2.5, freeSpeed: 6000, stallCurrent: 90, freeCurrent: 3,
   },
   wm900: {
     id: 'wm900', name: 'WM-900 24V weapon motor', mass: 3.0, cost: 220, sourcing: 'common', swapMinutes: 20,
@@ -80,6 +88,14 @@ export const MOTORS: Record<string, MotorSpec> = {
 };
 
 export const BATTERIES: Record<string, BatterySpec> = {
+  nicd12: {
+    id: 'nicd12', name: '12V 3Ah NiCd pack', mass: 1.6, cost: 70, sourcing: 'common', swapMinutes: 5,
+    chemistry: 'NiCd', voltage: 12, capacity: 36, maxCurrent: 120,
+  },
+  nicd24s: {
+    id: 'nicd24s', name: '24V 3Ah NiCd pack', mass: 3.0, cost: 140, sourcing: 'common', swapMinutes: 8,
+    chemistry: 'NiCd', voltage: 24, capacity: 72, maxCurrent: 150,
+  },
   sla24: {
     id: 'sla24', name: '24V 17Ah sealed lead-acid', mass: 12.4, cost: 90, sourcing: 'common', swapMinutes: 10,
     chemistry: 'SLA', voltage: 24, capacity: 408, maxCurrent: 200,
@@ -103,6 +119,10 @@ export const BATTERIES: Record<string, BatterySpec> = {
 };
 
 export const WHEELS: Record<string, WheelSpec> = {
+  foam100: {
+    id: 'foam100', name: '100mm foam-filled wheel', mass: 0.3, cost: 10, sourcing: 'common', swapMinutes: 3,
+    radius: 0.05, width: 0.035, grip: 0.9,
+  },
   pneu250: {
     id: 'pneu250', name: '250mm pneumatic tyre', mass: 1.6, cost: 25, sourcing: 'common', swapMinutes: 5,
     radius: 0.125, width: 0.08, grip: 0.95,
@@ -118,6 +138,10 @@ export const WHEELS: Record<string, WheelSpec> = {
 };
 
 export const RAMS: Record<string, RamSpec> = {
+  ram40: {
+    id: 'ram40', name: '40mm bore ram, 120mm stroke', mass: 1.2, cost: 160, sourcing: 'common', swapMinutes: 15,
+    bore: 40, stroke: 120, maxPressure: 25,
+  },
   ram63: {
     id: 'ram63', name: '63mm bore ram, 200mm stroke', mass: 3.0, cost: 350, sourcing: 'common', swapMinutes: 25,
     bore: 63, stroke: 200, maxPressure: 25,
@@ -144,6 +168,10 @@ export const VALVES: Record<string, ValveSpec> = {
 };
 
 export const TANKS: Record<string, TankSpec> = {
+  co2_250: {
+    id: 'co2_250', name: '250g CO2 bottle', mass: 0.9, cost: 40, sourcing: 'common', swapMinutes: 3,
+    capacity: 250,
+  },
   co2_1kg: {
     id: 'co2_1kg', name: '1kg CO2 bottle', mass: 2.5, cost: 90, sourcing: 'common', swapMinutes: 5,
     capacity: 1000,

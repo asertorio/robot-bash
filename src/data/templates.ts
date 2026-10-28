@@ -113,3 +113,25 @@ export const WHIRLWIND: RobotDesign = {
 };
 
 export const TEMPLATES: RobotDesign[] = [WEDGEHOG, FLIPSIDE, WHIRLWIND];
+
+/** Test-bay target: a heavy steel box that just sits there and takes it. */
+export const CRASH_TEST_DUMMY: RobotDesign = {
+  schema: 1,
+  id: 'dummy',
+  name: 'Crash Test Dummy',
+  description: 'A mild-steel box on wheels for testing weapons.',
+  colour: '#8a8f96',
+  shell: [{ id: 'body', label: 'Steel box', shape: 'box', size: [0.6, 0.24, 0.7], position: [0, 0.15, 0], material: 'mildSteel', thickness: 6 }],
+  skids: [],
+  drive: {
+    motor: 'dm750', motorsPerSide: 1, gearRatio: 9, motorPosition: [0.15, 0.13, 0],
+    wheels: [
+      { wheel: 'pneu250', position: [0.36, 0.125, 0.22], side: 'left' },
+      { wheel: 'pneu250', position: [0.36, 0.125, -0.22], side: 'left' },
+      { wheel: 'pneu250', position: [-0.36, 0.125, 0.22], side: 'right' },
+      { wheel: 'pneu250', position: [-0.36, 0.125, -0.22], side: 'right' },
+    ],
+  },
+  battery: { part: 'nicd24', position: [0, 0.1, -0.2] },
+  weapons: [],
+};

@@ -1,12 +1,16 @@
 import RAPIER from '@dimforge/rapier3d-compat';
-import { TEMPLATES } from './data/templates';
+import { loadDesigns } from './data/garage';
+import { CRASH_TEST_DUMMY, TEMPLATES } from './data/templates';
 import { loadProfiles, saveProfiles, type ControlProfile } from './input/bindings';
 import { InputManager } from './input/input';
 import { MatchView } from './render/view';
 import { CpuDriver } from './sim/ai';
+import type { RobotDesign } from './sim/design';
 import { Match } from './sim/match';
+import { isLegal, scrutineer } from './sim/rules';
 import { computeStats } from './sim/stats';
 import { controlsScreen } from './ui/controls';
+import { Garage } from './ui/garage';
 import { h, mount } from './ui/dom';
 import { statLines } from './ui/format';
 import { Hud, PLAYER_COLOURS } from './ui/hud';
@@ -22,6 +26,8 @@ class App {
   private hud: Hud | null = null;
   private cpus: (CpuDriver | null)[] = [];
   private picks = [1, 2];
+  private roster: RobotDesign[] = TEMPLATES;
+  private garage: Garage | null = null;
   private controllers: Controller[] = ['Human', 'CPU'];
   private paused = false;
   private resultShown = false;
@@ -36,12 +42,18 @@ class App {
 
   /** Two CPU robots scrapping behind the menus. */
   private attract() {
-    this.beginMatch([0, 2], ['CPU', 'CPU'], true);
+    this.beginMatch([TEMPLATES[0], TEMPLATES[2]], ['CPU', 'CPU'], true);
   }
 
-  private beginMatch(picks: number[], controllers: Controller[], background = false) {
+  private fight() {
+    this.beginMatch(this.picks.map((i) => this.roster[i]), this.controllers);
+  }
+
+  private beginMatch(designs: RobotDesign[], controllers: Controller[], background = false) {
     this.match?.free();
-    this.match = new Match(picks.map((i) => TEMPLATES[i]), { duration: background ? 1e9 : 180 });
+    this.garage = null;
+    this.view.cameraMode = 'tv';
+    this.match = new Match(designs, { duration: background ? 1e9 : 180 });
     this.cpus = controllers.map((c) => (c === 'CPU' ? new CpuDriver() : null));
     this.view.setMatch(this.match);
     this.paused = false;
@@ -58,7 +70,10 @@ class App {
     for (const code of this.input.takePressed()) this.screenKeys?.(code);
 
     const m = this.match;
-    if (m && !this.paused) {
+    if (m && this.garage) {
+      m.update(dt, [controls[0], { left: 0, right: 0, weapon: false, weapon2: false }]);
+      this.garage.update(dt);
+    } else if (m && !this.paused) {
       const live = this.hud ? controls : [];
       const inputs = m.robots.map((r, i) => {
         const cpu = this.cpus[i];
@@ -84,18 +99,48 @@ class App {
       h('div', { class: 'tagline' }, 'Build it · Fight it · Break it'),
       h('div', { class: 'menu' },
         h('button', { class: 'primary', onclick: () => this.selectScreen() }, 'Fight'),
+        h('button', { onclick: () => this.garageScreen() }, 'Garage'),
         h('button', { onclick: () => this.controlsScreen() }, 'Controls'),
         h('button', { onclick: () => this.howToScreen() }, 'How to play')),
       h('div', { class: 'hazard-bar' }),
       h('div', { class: 'footnote' }, 'A physics-simulated robot combat game in the spirit of the classic British TV show. Every hit is worked out from real forces — no health bars.')));
   }
 
+  private garageScreen(initial?: RobotDesign) {
+    this.screenKeys = null;
+    this.hud = null;
+    const garage = new Garage({
+      startBay: (d) => {
+        // Build first so a broken design leaves the old bay running.
+        const bay = new Match([d, CRASH_TEST_DUMMY], {
+          sandbox: true, skipCountdown: true,
+          spawns: [{ pos: { x: -1.5, y: 0.01, z: -1.5 }, yaw: 0 }, { pos: { x: -1.5, y: 0.01, z: 1 }, yaw: Math.PI / 2 }],
+        });
+        this.match?.free();
+        this.match = bay;
+        this.cpus = [];
+        this.view.setMatch(bay);
+        this.view.cameraMode = 'follow';
+        this.view.followIndex = 0;
+      },
+      bay: () => this.match,
+      exit: () => { this.garage = null; this.attract(); this.mainMenu(); },
+    }, initial);
+    this.garage = garage;
+    mount(this.ui, garage.el);
+  }
+
   private selectScreen() {
+    this.roster = [...TEMPLATES, ...loadDesigns()];
+    this.picks = this.picks.map((p) => Math.min(p, this.roster.length - 1));
+    const n = () => this.roster.length;
     const render = () => {
       const cards = [0, 1].map((p) => {
-        const design = TEMPLATES[this.picks[p]];
+        const design = this.roster[this.picks[p]];
         const stats = computeStats(design);
-        const cycle = (d: number) => { this.picks[p] = (this.picks[p] + d + TEMPLATES.length) % TEMPLATES.length; render(); };
+        const mine = !TEMPLATES.includes(design);
+        const issues = scrutineer(design);
+        const cycle = (d: number) => { this.picks[p] = (this.picks[p] + d + n()) % n(); render(); };
         const setCtl = (c: Controller) => { this.controllers[p] = c; render(); };
         return h('div', { class: 'robot-card', style: `--pc:${PLAYER_COLOURS[p]}` },
           h('div', { class: 'who' }, `Player ${p + 1}`,
@@ -105,24 +150,27 @@ class App {
             h('button', { onclick: () => cycle(-1), 'aria-label': 'Previous robot' }, '◀'),
             h('div', { class: 'name', style: `color:${design.colour}` }, design.name),
             h('button', { onclick: () => cycle(1), 'aria-label': 'Next robot' }, '▶')),
+          mine && h('div', { class: 'mine' }, 'Your build'),
           h('div', { class: 'desc' }, design.description),
           h('dl', { class: 'stats' }, ...statLines(stats).flatMap(([k, v, bad]) => [h('dt', {}, k), h('dd', { class: bad ? 'over' : '' }, v)])),
-          h('div', { class: 'keys-hint' }, p === 0 ? 'A / D to change robot' : 'J / L to change robot'));
+          !isLegal(issues) && h('div', { class: 'legal bad' }, `Fails heavyweight scrutineering: ${issues.find((i) => i.level === 'error')!.text}`),
+          h('div', { class: 'keys-hint' }, p === 0 ? 'A / D to change robot' : 'J / L to change robot'),
+          mine && h('button', { class: 'small', style: 'margin-top:8px', onclick: () => this.garageScreen(design) }, 'Edit in garage'));
       });
       mount(this.ui, h('div', { class: 'screen top' },
         h('h2', {}, 'Choose your robots'),
         h('div', { class: 'select-row' }, ...cards),
         h('div', { class: 'actions' },
           h('button', { onclick: () => this.mainMenu() }, 'Back'),
-          h('button', { class: 'primary', onclick: () => this.beginMatch(this.picks, this.controllers) }, 'Fight! (Enter)'))));
+          h('button', { class: 'primary', onclick: () => this.fight() }, 'Fight! (Enter)'))));
     };
     this.screenKeys = (code) => {
-      const step = (p: number, d: number) => { this.picks[p] = (this.picks[p] + d + TEMPLATES.length) % TEMPLATES.length; render(); };
+      const step = (p: number, d: number) => { this.picks[p] = (this.picks[p] + d + n()) % n(); render(); };
       if (code === 'KeyA') step(0, -1);
       if (code === 'KeyD') step(0, 1);
       if (code === 'KeyJ') step(1, -1);
       if (code === 'KeyL') step(1, 1);
-      if (code === 'Enter') this.beginMatch(this.picks, this.controllers);
+      if (code === 'Enter') this.fight();
       if (code === 'Escape') this.mainMenu();
     };
     render();
@@ -177,7 +225,7 @@ class App {
         h('h2', {}, 'Paused'),
         h('div', { class: 'menu' },
           h('button', { class: 'primary', onclick: () => this.togglePause() }, 'Resume'),
-          h('button', { onclick: () => this.beginMatch(this.picks, this.controllers) }, 'Restart fight'),
+          h('button', { onclick: () => this.fight() }, 'Restart fight'),
           h('button', { onclick: () => this.leaveFight(() => this.selectScreen()) }, 'Change robots'),
           h('button', { onclick: () => this.leaveFight(() => this.mainMenu()) }, 'Quit to menu')))));
   }
@@ -209,7 +257,7 @@ class App {
           ...(['aggression', 'control', 'damage', 'style', 'total'] as const).map((k) =>
             h('tr', {}, h('td', { style: 'text-align:left;text-transform:capitalize' }, k), ...scores.map((s) => h('td', {}, s[k].toFixed(1)))))),
         h('div', { class: 'menu' },
-          h('button', { class: 'primary', onclick: () => this.beginMatch(this.picks, this.controllers) }, 'Rematch'),
+          h('button', { class: 'primary', onclick: () => this.fight() }, 'Rematch'),
           h('button', { onclick: () => this.leaveFight(() => this.selectScreen()) }, 'Change robots'),
           h('button', { onclick: () => this.leaveFight(() => this.mainMenu()) }, 'Main menu')))));
   }

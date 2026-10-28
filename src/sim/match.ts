@@ -64,6 +64,8 @@ export interface MatchOptions {
   skipCountdown?: boolean;
   /** Override start positions (robot origin on the floor) and headings. */
   spawns?: Array<{ pos: V3; yaw: number }>;
+  /** Test bay: no referee, no time limit, nobody is eliminated. */
+  sandbox?: boolean;
 }
 
 export class Match {
@@ -75,6 +77,9 @@ export class Match {
   /** Seconds since activation (negative during the countdown). */
   time: number;
   commentary: CommentaryLine[] = [];
+  readonly sandbox: boolean;
+  /** The biggest single impact so far, for test-bay telemetry. */
+  biggestHit: { energy: number; time: number; parts: string } | null = null;
   /** Hard hits since the renderer last looked (for sparks). */
   impacts: Array<{ point: V3; energy: number }> = [];
   result: MatchResult | null = null;
@@ -103,7 +108,8 @@ export class Match {
       { pos: { x: 3.5, y: 0.01, z: 0 }, yaw: -Math.PI / 2 },
     ];
     this.robots = designs.map((d, i) => new Robot(this.world, d, i, spawns[i].pos, spawns[i].yaw));
-    this.duration = opts.duration ?? 180;
+    this.sandbox = opts.sandbox ?? false;
+    this.duration = this.sandbox ? Infinity : opts.duration ?? 180;
     this.phase = opts.skipCountdown ? 'fight' : 'countdown';
     this.time = opts.skipCountdown ? 0 : -COUNTDOWN;
     this.controls = this.robots.map(() => NEUTRAL);
@@ -210,6 +216,10 @@ export class Match {
       const prior = ep.energy / 2;
       ep.energy += energy;
       ep.last = this.time;
+      if (ep.energy > 20 && ep.energy > (this.biggestHit?.energy ?? 0) && (owner1 || owner2)) {
+        const names = [owner1, owner2].filter(Boolean).map((o) => `${o!.robot.design.name} ${o!.part.label.toLowerCase()}`);
+        this.biggestHit = { energy: ep.energy, time: this.time, parts: names.join(' vs ') };
+      }
 
       // Each side of the contact soaks up half.
       const half = energy / 2;
@@ -260,6 +270,7 @@ export class Match {
         this.say(`${r.design.name} has hit the pit release — the pit is open!`, 'major');
       }
       const pos = r.position;
+      if (this.sandbox) return;
       if (this.arena.isInPit(pos)) return this.eliminate(i, 'into the pit');
       if (this.arena.isOutOfArena(pos)) return this.eliminate(i, 'out of the arena');
       if (this.phase !== 'fight') return;
@@ -292,7 +303,7 @@ export class Match {
       }
     });
 
-    if (this.phase === 'fight') {
+    if (this.phase === 'fight' && !this.sandbox) {
       const left = alive();
       if (left.length <= 1 && this.robots.length > 1) {
         const winner = left[0];
