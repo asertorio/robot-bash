@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js';
 import { ARENA, arenaBoxes, flamePitRect } from '../sim/arena';
+import type { Shape } from '../sim/design';
+import { planeMap, wedgePoints } from '../sim/shapes';
 import type { Match } from '../sim/match';
 import type { Part, Robot } from '../sim/robot';
 
@@ -235,12 +237,14 @@ export class MatchView {
   private syncParts() {
     const scorch = new THREE.Color(0x221d18);
     for (const { part, mesh, base, mats } of this.partMeshes) {
-      const c = part.collider;
-      if (!c) { mesh.visible = false; continue; }
+      const b = part.body, v = part.visual;
+      if (!b || !v || !part.collider) { mesh.visible = false; continue; }
       mesh.visible = true;
-      const p = c.translation(), q = c.rotation();
-      mesh.position.set(p.x, p.y, p.z);
-      mesh.quaternion.set(q.x, q.y, q.z, q.w);
+      // Body pose × the part's pose on that body.
+      const bp = b.translation(), bq = b.rotation();
+      const q = new THREE.Quaternion(bq.x, bq.y, bq.z, bq.w);
+      mesh.position.set(v.pos.x, v.pos.y, v.pos.z).applyQuaternion(q).add(new THREE.Vector3(bp.x, bp.y, bp.z));
+      mesh.quaternion.copy(q).multiply(new THREE.Quaternion(v.rot.x, v.rot.y, v.rot.z, v.rot.w));
       // Battle damage shows as scorching, not as a bar.
       if (part.kind === 'structure') {
         mats[0].color.copy(base).lerp(scorch, (1 - Math.max(0, part.condition)) * 0.75);
@@ -282,6 +286,15 @@ export class MatchView {
   }
 
   private syncFlames(m: Match, dt: number) {
+    for (const r of m.robots) {
+      for (const f of r.activeFlames()) {
+        for (let i = 0; i < 6 && this.flameData.length < 400; i++) {
+          const spread = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(0.5);
+          const dir = new THREE.Vector3(f.dir.x, f.dir.y, f.dir.z).add(spread).normalize();
+          this.flameData.push({ p: new THREE.Vector3(f.origin.x, f.origin.y, f.origin.z), v: dir.multiplyScalar(f.range * 2.2), life: 0.35 + Math.random() * 0.15 });
+        }
+      }
+    }
     const fr = flamePitRect();
     const on = m.arena.flamesOn;
     this.flameLight.intensity += ((on ? 40 + Math.random() * 25 : 0) - this.flameLight.intensity) * Math.min(1, dt * 12);
@@ -371,30 +384,72 @@ export class MatchView {
 }
 
 function buildPartMesh(part: Part): { mesh: THREE.Object3D; mats: THREE.MeshStandardMaterial[] } {
-  const v = part.visual!;
+  const shape = part.visual!.shape;
   const colour = part.colour ?? 0x888888;
-  const mat = new THREE.MeshStandardMaterial({ color: colour, metalness: 0.45, roughness: 0.45 });
-  let geo: THREE.BufferGeometry;
-  if (v.type === 'hull') geo = new ConvexGeometry(v.points.map((p) => new THREE.Vector3(...p)));
-  else if (v.type === 'box') geo = new THREE.BoxGeometry(v.half[0] * 2, v.half[1] * 2, v.half[2] * 2);
-  else if (v.type === 'cylinder') geo = new THREE.CylinderGeometry(v.radius, v.radius, v.halfHeight * 2, 28);
-  else if (v.type === 'cone') geo = new THREE.ConeGeometry(v.radius, v.halfHeight * 2, 28);
-  else if (v.type === 'capsule') geo = new THREE.CapsuleGeometry(v.radius, v.halfHeight * 2, 6, 16);
-  else geo = new THREE.SphereGeometry(v.radius, 24, 16);
+  const mat = new THREE.MeshStandardMaterial({ color: colour, metalness: 0.45, roughness: 0.45, side: shape.type === 'mesh' ? THREE.DoubleSide : THREE.FrontSide });
+  const geo = shapeGeometry(shape);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   const group = new THREE.Group();
   group.add(mesh);
   // Crisp edges read better at TV distance.
-  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 25), new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.45 }));
-  group.add(edges);
-  if (part.kind === 'wheel' && v.type === 'cylinder') {
+  if (shape.type !== 'mesh' && shape.type !== 'lathe') {
+    group.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo, 25), new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.45 })));
+  }
+  if (part.kind === 'wheel' && shape.type === 'cylinder') {
     // Hub, so you can see the wheel turning.
-    const hub = new THREE.Mesh(new THREE.CylinderGeometry(v.radius * 0.45, v.radius * 0.45, v.halfHeight * 2 + 0.006, 6), new THREE.MeshStandardMaterial({ color: 0x9a9fa6, metalness: 0.8, roughness: 0.3 }));
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(shape.radius * 0.45, shape.radius * 0.45, shape.length + 0.006, 6), new THREE.MeshStandardMaterial({ color: 0x9a9fa6, metalness: 0.8, roughness: 0.3 }));
     group.add(hub);
   }
   return { mesh: group, mats: [mat] };
+}
+
+/** Three.js geometry for any design shape, centred on the shape origin like its colliders. */
+export function shapeGeometry(s: Shape): THREE.BufferGeometry {
+  switch (s.type) {
+    case 'box': return new THREE.BoxGeometry(s.size[0], s.size[1], s.size[2]);
+    case 'cylinder': return new THREE.CylinderGeometry(s.radius, s.radius, s.length, 32);
+    case 'cone': return new THREE.ConeGeometry(s.radius, s.length, 32);
+    case 'capsule': return new THREE.CapsuleGeometry(s.radius, s.length, 6, 16);
+    case 'sphere': return new THREE.SphereGeometry(s.radius, 28, 18);
+    case 'lathe': return new THREE.LatheGeometry(s.profile.map(([r, y]) => new THREE.Vector2(Math.abs(r), y)), Math.max(8, s.segments ?? 32));
+    case 'mesh': {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(s.vertices, 3));
+      g.setIndex(s.indices);
+      g.computeVertexNormals();
+      return g;
+    }
+    case 'extrude': {
+      const outline = new THREE.Shape(s.outline.map(([u, v]) => new THREE.Vector2(u, v)));
+      const g = new THREE.ExtrudeGeometry(outline, { depth: s.depth, bevelEnabled: false });
+      g.translate(0, 0, -s.depth / 2);
+      // Extrude draws in XY and extrudes along Z; map into the chosen plane.
+      const map = planeMap(s.plane);
+      const pos = g.attributes.position as THREE.BufferAttribute;
+      for (let i = 0; i < pos.count; i++) {
+        const [x, y, z] = map(pos.getX(i), pos.getY(i), pos.getZ(i));
+        pos.setXYZ(i, x, y, z);
+      }
+      // 'side' and 'top' mappings mirror the winding; flip faces back.
+      if (s.plane !== 'front') {
+        const idx = g.index;
+        if (idx) for (let i = 0; i < idx.count; i += 3) { const a = idx.getX(i); idx.setX(i, idx.getX(i + 2)); idx.setX(i + 2, a); }
+        else for (let i = 0; i < pos.count; i += 3) {
+          const ax = pos.getX(i), ay = pos.getY(i), az = pos.getZ(i);
+          pos.setXYZ(i, pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2));
+          pos.setXYZ(i + 2, ax, ay, az);
+        }
+      }
+      g.computeVertexNormals();
+      return g;
+    }
+    default: {
+      const pts = (s.type === 'wedge' ? wedgePoints(s.size, s.lip) : s.points).map((p) => new THREE.Vector3(...p));
+      return new ConvexGeometry(pts);
+    }
+  }
 }
 
 function canvasTexture(size: number, draw: (g: CanvasRenderingContext2D) => void): THREE.CanvasTexture {

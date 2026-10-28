@@ -1,6 +1,6 @@
 import { material, type Sourcing } from '../data/materials';
 import { BATTERIES, GEARBOX, MOTORS, RAMS, TANKS, VALVES, WHEELS, lookup } from '../data/parts';
-import { actuatorMass, inertiaAbout, partFrames, partMass, rigidGroup, shapeCorners, unit } from './assembly';
+import { actuatorMass, actuatorOf, inertiaAbout, partFrames, partMass, registerCatalog, rigidGroup, shapeCorners, unit } from './assembly';
 import type { ActuatorDef, PartDef, RobotDesign } from './design';
 import { RPM_TO_RADS } from './motor';
 import { qrotate, vdot, vlen, vscale, vsub } from './vmath';
@@ -21,7 +21,7 @@ export function gasDensity(pressureBar: number): number {
 }
 
 const actuatorsOf = (d: RobotDesign) =>
-  d.parts.flatMap((p) => (p.joint.type !== 'fixed' && p.joint.actuator ? [{ part: p, act: p.joint.actuator }] : []));
+  d.parts.flatMap((p) => { const act = actuatorOf(p); return act ? [{ part: p, act }] : []; });
 
 /** Speed controllers, radio and wiring: sized by how much current the motors can pull. */
 export function electronicsMass(d: RobotDesign): number {
@@ -48,18 +48,21 @@ export function billOfMaterials(d: RobotDesign): BomLine[] {
       const c = p.component!;
       if (c.type === 'battery') { const b = lookup(BATTERIES, c.part, 'battery'); lines.push({ label: b.name, mass, cost: b.cost, sourcing: b.sourcing, swapMinutes: b.swapMinutes }); }
       else if (c.type === 'gasTank') { const t = lookup(TANKS, c.part, 'tank'); lines.push({ label: `${t.name} (charged)`, mass, cost: t.cost + 10, sourcing: t.sourcing, swapMinutes: t.swapMinutes }); }
+      else if (c.type === 'flamethrower') lines.push({ label: `${p.label} (flamethrower, ${c.fuel} kg fuel)`, mass, cost: 450 + c.fuel * 8, sourcing: 'specialist', swapMinutes: 20 });
       else lines.push({ label: p.label, mass, cost: mass * 2, sourcing: 'common', swapMinutes: 5 });
     } else {
       const m = material(p.material ?? 'aluminium');
       // Fabrication: plate and simple shapes are cheap; curved and freeform parts cost more and can't be bought.
       const shape = p.shape!.type;
-      const fab = shape === 'box' || shape === 'wedge' ? 60 : shape === 'hull' ? 220 : 140;
-      const sourcing: Sourcing = shape === 'hull' ? 'custom' : shape === 'box' || shape === 'wedge' ? m.sourcing : m.sourcing === 'common' ? 'specialist' : 'custom';
+      const freeform = shape === 'hull' || shape === 'extrude' || shape === 'lathe' || shape === 'mesh';
+      const fab = shape === 'box' || shape === 'wedge' ? 60 : shape === 'extrude' ? 120 : freeform ? 260 : 140;
+      // Profile-cut plate (extrusions) can be ordered; turned, cast and printed parts are one-offs.
+      const sourcing: Sourcing = shape === 'box' || shape === 'wedge' ? m.sourcing : shape === 'extrude' ? worst(m.sourcing, 'specialist') : freeform ? 'custom' : m.sourcing === 'common' ? 'specialist' : 'custom';
       const what = p.wall ? `${p.wall}mm ${m.name} ${shape}` : `solid ${m.name} ${shape}`;
       lines.push({ label: `${p.label} (${what})`, mass, cost: mass * m.costPerKg + fab, sourcing, swapMinutes: 25 });
     }
-    if (p.joint.type !== 'fixed' && p.joint.actuator) {
-      const a = p.joint.actuator;
+    const a = actuatorOf(p);
+    if (a) {
       if (a.type === 'pneumatic') {
         const ram = lookup(RAMS, a.ram, 'ram'), valve = lookup(VALVES, a.valve, 'valve');
         lines.push({ label: `${p.label}: ${ram.name} + ${valve.name}`, mass: actuatorMass(a), cost: ram.cost + valve.cost, sourcing: worst(ram.sourcing, valve.sourcing), swapMinutes: ram.swapMinutes + valve.swapMinutes });
@@ -107,6 +110,7 @@ export interface RobotStats {
 }
 
 export function computeStats(d: RobotDesign): RobotStats {
+  registerCatalog(d);
   const bom = billOfMaterials(d);
   const mass = bom.reduce((s, l) => s + l.mass, 0);
   const cost = bom.reduce((s, l) => s + l.cost, 0);
@@ -199,6 +203,11 @@ export function computeStats(d: RobotDesign): RobotStats {
       const torque = m.stallTorque * (voltage / m.voltage) * act.gear * GEARBOX.efficiency;
       weapons.push({ label: `${part.label} (${button})`, kind: 'servo', energy: 0, lines: [`servo · ${fmt(torque)} N·m · ${act.targets.map((t) => fmt(t)).join(' / ')}${part.joint.type === 'hinge' ? '°' : ' mm'}`] });
     }
+  }
+  for (const p of d.parts) {
+    const c = p.component;
+    if (c?.type !== 'flamethrower') continue;
+    weapons.push({ label: `${p.label} (${c.input.source.replace('button', 'button ')})`, kind: 'motor', energy: 0, lines: [`flamethrower · ${fmt(c.range, 1)} m reach · ${fmt(c.fuel / 0.06)} s of fuel`] });
   }
   const runtime = amps > 0 && voltage > 0 ? (capacity / (voltage * amps)) * 3600 : capacity > 0 ? Infinity : 0;
   const hardestSpare = bom.reduce<Sourcing>((h, l) => worst(h, l.sourcing), 'common');

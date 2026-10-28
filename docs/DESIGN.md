@@ -100,6 +100,32 @@ campaign, save files and (later) AI-assisted design all produce RobotDesigns.
 - Batteries, gas bottles and actuators fail in place (power loss, a gas leak,
   a dead motor).
 
+**Shapes** (`src/sim/shapes.ts`): the physics engine only collides convex
+pieces, so every shape is reduced to convex pieces, and mass, inertia and
+collisions all come from those same pieces.
+
+- Primitives are one piece each.
+- Extruded outlines are triangulated (ear clipping), then merged back into
+  as few convex polygons as possible (Hertel–Mehlhorn), and each is
+  extruded into a prism.
+- Lathe profiles become a stack of frustums.
+- Imported meshes are voxelised by ray-casting along X, and the voxels are
+  greedily merged into boxes.
+
+Rendering uses the true shape.
+
+**Also:**
+
+- Ball joints for flails.
+- Joint springs.
+- Flamethrower components: heat in a cone, with the same heat model as the
+  flame pit.
+- A design-level `catalog` of custom motors, batteries, wheels, rams,
+  valves, tanks and materials, registered by id when the design is built.
+
+What remains a limit is physics: parts are rigid (nothing bends, cuts or
+deforms), and a robot's own parts don't collide with each other.
+
 v1 designs (a single shell, two-sided drive and one weapon) still load:
 `src/sim/legacy.ts` converts them. The starter robots are written that way.
 

@@ -1,5 +1,5 @@
 import { WHEELS, lookup } from '../data/parts';
-import { designBounds, partFrames, root, subtree } from './assembly';
+import { actuatorOf, designBounds, partFrames, root, subtree } from './assembly';
 import type { ActuatorDef, InputDef, PartDef, RobotDesign, Shape, Vec3 } from './design';
 import { qconj, qrotate, vsub } from './vmath';
 
@@ -23,14 +23,17 @@ export function newId(d: RobotDesign, base: string): string {
 export type NewPartKind =
   | 'box' | 'wedge' | 'cylinder' | 'cone' | 'sphere' | 'capsule' | 'plate' | 'bar'
   | 'wheel' | 'battery' | 'gasTank' | 'ballast'
-  | 'flipper' | 'spinner' | 'lifter' | 'axe' | 'spike' | 'leg';
+  | 'flipper' | 'spinner' | 'lifter' | 'axe' | 'spike' | 'leg'
+  | 'outline' | 'lathe' | 'model' | 'flail' | 'flamethrower' | 'suspensionWheel' | 'crusher';
 
 export const NEW_PART_KINDS: Array<[NewPartKind, string, string]> = [
+  ['outline', 'Drawn outline — any 2D shape, extruded', 'Shapes'], ['lathe', 'Drawn profile — spun into a drum, dome…', 'Shapes'], ['model', 'Imported 3D model (STL / OBJ)', 'Shapes'],
   ['box', 'Box', 'Shapes'], ['wedge', 'Wedge', 'Shapes'], ['plate', 'Flat plate', 'Shapes'], ['bar', 'Bar / beam', 'Shapes'],
   ['cylinder', 'Cylinder / disc', 'Shapes'], ['cone', 'Cone', 'Shapes'], ['sphere', 'Sphere', 'Shapes'], ['capsule', 'Capsule / rod', 'Shapes'],
-  ['wheel', 'Driven wheel', 'Drive'], ['leg', 'Walking leg (hip + knee servos)', 'Drive'],
+  ['wheel', 'Driven wheel', 'Drive'], ['suspensionWheel', 'Driven wheel on sprung suspension', 'Drive'], ['leg', 'Walking leg (hip + knee servos)', 'Drive'],
   ['flipper', 'Flipper (ram on a hinge)', 'Weapons'], ['lifter', 'Lifter (slow ram)', 'Weapons'], ['axe', 'Axe / hammer (ram)', 'Weapons'],
   ['spinner', 'Spinner (motor on a hinge)', 'Weapons'], ['spike', 'Ram spike (slider)', 'Weapons'],
+  ['crusher', 'Crusher jaw (ram, pivots down)', 'Weapons'], ['flail', 'Flail (chain and ball)', 'Weapons'], ['flamethrower', 'Flamethrower (banned — Open class)', 'Weapons'],
   ['battery', 'Battery', 'Internals'], ['gasTank', 'Gas bottle', 'Internals'], ['ballast', 'Ballast weight', 'Internals'],
 ];
 
@@ -63,7 +66,7 @@ export function newParts(d: RobotDesign, kind: NewPartKind, parentId = root(d).i
   const at = placement(d, parentId);
   const btn = (n: number, mode: InputDef['mode'] = 'hold'): InputDef => ({ source: `button${n}` as InputDef['source'], mode });
   const nextButton = () => {
-    const used = new Set(d.parts.flatMap((p) => (p.joint.type !== 'fixed' && p.joint.actuator ? [p.joint.actuator.input.source] : [])));
+    const used = new Set(d.parts.flatMap((p) => { const a = actuatorOf(p); return a ? [a.input.source] : []; }));
     for (let n = 1; n <= 4; n++) if (!used.has(`button${n}` as InputDef['source'])) return n;
     return 1;
   };
@@ -117,6 +120,53 @@ export function newParts(d: RobotDesign, kind: NewPartKind, parentId = root(d).i
       blade.joint = { type: 'hinge', axis: [0, 1, 0], actuator: { type: 'motor', motor: 'wm900', gear: 3, input: btn(nextButton(), 'toggle') } };
       return [blade];
     }
+    case 'outline': return [shapePart(d, parentId, 'Drawn part', { type: 'extrude', plane: 'top', depth: 0.01, outline: [[-0.2, -0.1], [0.2, -0.1], [0.15, 0.15], [-0.15, 0.15]] }, at.top, { material: 'aluminium' })];
+    case 'lathe': return [shapePart(d, parentId, 'Turned part', { type: 'lathe', segments: 24, profile: [[0, -0.08], [0.1, -0.08], [0.12, 0], [0.1, 0.08], [0, 0.08]] }, at.top, { material: 'aluminium', wall: 5 })];
+    case 'model': return [shapePart(d, parentId, 'Model', { type: 'mesh', vertices: [-0.1, -0.05, -0.1, 0.1, -0.05, -0.1, 0.1, 0.05, -0.1, -0.1, 0.05, -0.1, -0.1, -0.05, 0.1, 0.1, -0.05, 0.1, 0.1, 0.05, 0.1, -0.1, 0.05, 0.1], indices: [0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2, 0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5] }, at.top, { material: 'aluminium' })];
+    case 'flamethrower': return [{
+      id: newId(d, 'flamethrower'), label: 'Flamethrower', parent: parentId, role: 'component', position: at.front, rotation: [0, 0, 0], joint: { type: 'fixed' },
+      component: { type: 'flamethrower', range: 0.8, fuel: 1.5, input: btn(nextButton()) },
+    }];
+    case 'crusher': {
+      const jaw = shapePart(d, parentId, 'Crusher jaw', { type: 'extrude', plane: 'side', depth: 0.06, outline: [[0, -0.02], [0.45, -0.02], [0.5, -0.12], [0.44, -0.12], [0.4, 0.02], [0, 0.03]] }, at.top, { material: 'hardox' });
+      jaw.joint = { type: 'hinge', axis: [1, 0, 0], limits: [-15, 70], actuator: { type: 'pneumatic', ram: 'ram80', valve: 'std', pressure: 22, leverArm: 0.1, input: btn(nextButton()) } };
+      jaw.rotation = [-60, 0, 0];
+      return [jaw];
+    }
+    case 'flail': {
+      // A robot's own parts don't collide with each other, so the chain hangs
+      // off a mast rather than lying on the body (it would fall through).
+      const mast = shapePart(d, parentId, 'Flail mast', { type: 'cylinder', radius: 0.02, length: 0.3 }, [at.top[0], round(at.top[1] + 0.15), at.top[2]], { material: 'mildSteel' });
+      const out: PartDef[] = [mast];
+      d = { ...d, parts: [...d.parts, mast] };
+      let parent = mast.id;
+      let pos: Vec3 = [0, 0.15, 0];
+      for (let i = 0; i < 2; i++) {
+        // The chain runs along each link's +Y; the first link turns it to point forward.
+        const link = shapePart(d, parent, `Flail link ${i + 1}`, { type: 'capsule', radius: 0.012, length: 0.08 }, pos, { shapeOffset: [0, 0.055, 0], rotation: i === 0 ? [90, 0, 0] : [0, 0, 0], material: 'mildSteel' });
+        link.joint = { type: 'ball' };
+        out.push(link);
+        d = { ...d, parts: [...d.parts, link] };
+        parent = link.id;
+        pos = [0, 0.11, 0];
+      }
+      const ball = shapePart(d, parent, 'Flail ball', { type: 'sphere', radius: 0.06 }, [0, 0.13, 0], { material: 'mildSteel' });
+      out.push(ball);
+      return out;
+    }
+    case 'suspensionWheel': {
+      const left = d.parts.filter((p) => p.role === 'wheel' && p.position[0] > 0).length <= d.parts.filter((p) => p.role === 'wheel' && p.position[0] < 0).length;
+      const s = at.side(left ? 1 : -1);
+      const pf = partFrames(d).get(parentId)!;
+      const r = lookup(WHEELS, 'pneu250', 'wheel').radius;
+      const strut = shapePart(d, parentId, `${left ? 'Left' : 'Right'} suspension strut`, { type: 'box', size: [0.03, 0.08, 0.05] }, [round(s[0] + (left ? 0.02 : -0.02)), round(r - pf.pos.y), 0], { material: 'mildSteel' });
+      strut.joint = { type: 'slider', axis: [0, 1, 0], limits: [-30, 40], spring: { stiffness: 30, damping: 1.5 } };
+      const wheel: PartDef = {
+        id: newId(d, 'wheel'), label: `${left ? 'Left' : 'Right'} wheel`, parent: strut.id, role: 'wheel', wheel: 'pneu250', position: [left ? 0.06 : -0.06, 0, 0], rotation: [0, 0, 0],
+        joint: { type: 'hinge', axis: [1, 0, 0], actuator: { type: 'motor', motor: 'dm750', gear: 9, input: { source: left ? 'left' : 'right', scale: 1 } } },
+      };
+      return [strut, wheel];
+    }
     case 'leg': {
       const left = d.parts.filter((p) => p.label.startsWith('Left leg')).length <= d.parts.filter((p) => p.label.startsWith('Right leg')).length;
       const sgn = left ? 1 : -1;
@@ -148,7 +198,14 @@ export function mirrorPart(d: RobotDesign, id: string): PartDef[] {
     p.rotation = [p.rotation[0], -p.rotation[1], -p.rotation[2]];
     if (p.shapeOffset) p.shapeOffset = [-p.shapeOffset[0], p.shapeOffset[1], p.shapeOffset[2]];
     if (p.shape?.type === 'hull') p.shape.points = p.shape.points.map(([x, y, z]) => [-x, y, z] as Vec3);
-    if (p.joint.type !== 'fixed') {
+    if (p.shape?.type === 'extrude' && p.shape.plane !== 'side') p.shape.outline = p.shape.outline.map(([u, v]) => [-u, v] as [number, number]);
+    if (p.shape?.type === 'mesh') {
+      const m = p.shape;
+      for (let i = 0; i < m.vertices.length; i += 3) m.vertices[i] = -m.vertices[i];
+      for (let i = 0; i < m.indices.length; i += 3) [m.indices[i + 1], m.indices[i + 2]] = [m.indices[i + 2], m.indices[i + 1]];
+    }
+    if (p.component?.type === 'flamethrower' && p.component.input.side) p.component.input.side = p.component.input.side === 'left' ? 'right' : 'left';
+    if (p.joint.type === 'hinge' || p.joint.type === 'slider') {
       // Axes are rotations, so a mirror flips the parts across X but keeps X.
       p.joint.axis = [p.joint.axis[0], -p.joint.axis[1], -p.joint.axis[2]];
       const inp = p.joint.actuator?.input;

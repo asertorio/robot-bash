@@ -105,6 +105,7 @@ export class Match {
   private onFloorFlipper = 0;
   private lastRoast = new Map<Robot, number>();
   private lastCountSay: number[] = [];
+  private lastTorch = new Map<string, number>();
 
   constructor(designs: RobotDesign[], opts: MatchOptions = {}) {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -306,6 +307,31 @@ export class Match {
         }
         if (hit && this.time - (this.lastRoast.get(r) ?? -99) > 5) this.say(`${r.design.name} is roasting in the flame pit!`, 'info');
         if (hit) this.lastRoast.set(r, this.time);
+      }
+    }
+    // Flamethrowers: anything in the cone of fire heats up.
+    for (const r of this.robots) {
+      for (const f of r.activeFlames()) {
+        for (const o of this.robots) {
+          if (o === r) continue;
+          let hit = false;
+          for (const p of o.parts) {
+            const c = p.collider;
+            if (!c || p.detached) continue;
+            const d = vsub(c.translation(), f.origin);
+            const along = vdot(d, f.dir);
+            if (along <= 0 || along > f.range) continue;
+            const perp = vlen(vsub(d, vscale(f.dir, along)));
+            if (perp > 0.06 + along * 0.35) continue;
+            o.heat(p, dt * 1.5);
+            hit = true;
+          }
+          const key = `${r.index}>${o.index}`;
+          if (hit && this.time - (this.lastTorch.get(key) ?? -99) > 6) {
+            this.lastTorch.set(key, this.time);
+            this.say(`${r.design.name} is torching ${o.design.name}!`, 'major');
+          }
+        }
       }
     }
   }

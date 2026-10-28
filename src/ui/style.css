@@ -203,3 +203,8 @@ textarea.json { width: 100%; background: #0d0f13; color: var(--muted); border: 1
 .add-row select { min-width: 0; }
 .inspector { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 2px; }
 .inspector h4:first-child { color: var(--hazard); }
+
+/* Sketch board and custom parts */
+.sketch-box { margin: 6px 0 10px; }
+.sketch { display: block; width: 100%; max-width: 330px; aspect-ratio: 1; background: #0d0f13; border: 1px solid var(--line); border-radius: 4px; cursor: crosshair; touch-action: none; }
+.spec { border-left: 3px solid var(--hazard); padding: 2px 0 4px 8px; margin: 2px 0 10px; background: rgba(242,194,0,0.04); }

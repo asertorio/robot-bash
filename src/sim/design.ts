@@ -1,3 +1,6 @@
+import type { Material } from '../data/materials';
+import type { BatterySpec, MotorSpec, RamSpec, TankSpec, ValveSpec, WheelSpec } from '../data/parts';
+
 /**
  * RobotDesign v2: a robot is a tree of parts. Each part has a shape and a
  * material (or is a catalogue component), sits somewhere on its parent, and
@@ -30,7 +33,18 @@ export type Shape =
   /** Straight section `length` long along Y, rounded ends. */
   | { type: 'capsule'; radius: number; length: number }
   /** Convex hull of arbitrary points. */
-  | { type: 'hull'; points: Vec3[] };
+  | { type: 'hull'; points: Vec3[] }
+  /**
+   * Any 2D outline (concave is fine — hooks, claws, teeth), extruded `depth`.
+   * 'top': drawn from above (u = left, v = forward), extruded up.
+   * 'side': drawn side-on (u = forward, v = up), extruded across.
+   * 'front': drawn face-on (u = left, v = up), extruded front-to-back.
+   */
+  | { type: 'extrude'; outline: Array<[number, number]>; depth: number; plane?: 'top' | 'side' | 'front' }
+  /** Solid of revolution about the part's Y: profile points are [radius, height]. */
+  | { type: 'lathe'; profile: Array<[number, number]>; segments?: number }
+  /** Any triangle mesh (e.g. an imported STL/OBJ). Physics uses voxel boxes `voxel` m across. */
+  | { type: 'mesh'; vertices: number[]; indices: number[]; voxel?: number };
 
 export type InputSource = 'left' | 'right' | 'throttle' | 'steer' | 'button1' | 'button2' | 'button3' | 'button4' | 'gait';
 
@@ -60,17 +74,28 @@ export type ActuatorDef =
    */
   | { type: 'servo'; motor: string; gear: number; input: InputDef; targets: Vec3 };
 
+/** Pulls a joint back to its built position. Hinges: N·m per degree; sliders: N per mm. */
+export interface SpringDef {
+  stiffness: number;
+  /** Damping: N·m·s per degree (hinge) or N·s per mm (slider). */
+  damping: number;
+}
+
 export type JointDef =
   | { type: 'fixed' }
   /** Rotates about `axis` (in the part's frame). Limits in degrees from the built pose. */
-  | { type: 'hinge'; axis: Vec3; limits?: [number, number]; actuator?: ActuatorDef }
+  | { type: 'hinge'; axis: Vec3; limits?: [number, number]; actuator?: ActuatorDef; spring?: SpringDef }
   /** Slides along `axis`. Limits in mm from the built pose. */
-  | { type: 'slider'; axis: Vec3; limits: [number, number]; actuator?: ActuatorDef };
+  | { type: 'slider'; axis: Vec3; limits: [number, number]; actuator?: ActuatorDef; spring?: SpringDef }
+  /** Swings freely in every direction (flails, chains, wrecking balls). */
+  | { type: 'ball' };
 
 export type ComponentDef =
   | { type: 'battery'; part: string }
   | { type: 'gasTank'; part: string }
-  | { type: 'ballast'; mass: number };
+  | { type: 'ballast'; mass: number }
+  /** Shoots flame along the part's +Z while its input is on. Burns fuel (kg). */
+  | { type: 'flamethrower'; input: InputDef; range: number; fuel: number };
 
 export interface PartDef {
   id: string;
@@ -97,6 +122,17 @@ export interface PartDef {
   colour?: string;
 }
 
+/** Builder-defined catalogue parts, referenced by id like any other. */
+export interface CustomCatalog {
+  motors?: Record<string, MotorSpec>;
+  batteries?: Record<string, BatterySpec>;
+  wheels?: Record<string, WheelSpec>;
+  rams?: Record<string, RamSpec>;
+  valves?: Record<string, ValveSpec>;
+  tanks?: Record<string, TankSpec>;
+  materials?: Record<string, Material>;
+}
+
 export interface RobotDesign {
   schema: 2;
   id: string;
@@ -104,4 +140,6 @@ export interface RobotDesign {
   description: string;
   colour: string;
   parts: PartDef[];
+  /** Your own motors, batteries, materials… */
+  catalog?: CustomCatalog;
 }

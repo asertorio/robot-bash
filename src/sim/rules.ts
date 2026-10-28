@@ -1,6 +1,6 @@
 import { material } from '../data/materials';
 import { BATTERIES, MOTORS, RAMS, lookup } from '../data/parts';
-import { designBounds, partFrames, rigidGroup, root, shapeCorners, treeErrors } from './assembly';
+import { actuatorOf, designBounds, partFrames, rigidGroup, root, shapeCorners, treeErrors } from './assembly';
 import type { RobotDesign } from './design';
 import { computeStats, isLocomotion, type RobotStats } from './stats';
 
@@ -16,6 +16,8 @@ export const WEIGHT_CLASSES: WeightClass[] = [
   { id: 'light', name: 'Lightweight', limit: 30 },
   { id: 'middle', name: 'Middleweight', limit: 55 },
   { id: 'heavy', name: 'Heavyweight', limit: 100 },
+  { id: 'super', name: 'Super-heavyweight', limit: 250 },
+  { id: 'open', name: 'Open (anything goes)', limit: Infinity },
 ];
 
 export interface BudgetClass {
@@ -67,7 +69,9 @@ export function scrutineer(d: RobotDesign, rules: Rules = DEFAULT_RULES, stats?:
 
   // Fit and the floor.
   const b = designBounds(d);
-  if (b.max.x - b.min.x > MAX_SIZE || b.max.z - b.min.z > MAX_SIZE) err(`Too big: it must fit in ${MAX_SIZE} m × ${MAX_SIZE} m.`);
+  const open = rules.weight.limit === Infinity;
+  if (!open && (b.max.x - b.min.x > MAX_SIZE || b.max.z - b.min.z > MAX_SIZE)) err(`Too big: it must fit in ${MAX_SIZE} m × ${MAX_SIZE} m.`);
+  if (!open && d.parts.some((p) => p.component?.type === 'flamethrower')) err('Flamethrowers are a banned weapon — only allowed in the Open class.');
   if (b.min.y < -0.003) err(`Something is ${Math.round(-b.min.y * 1000)} mm below the floor — raise it.`);
   else if (b.min.y > 0.02) warn(`The lowest point is ${Math.round(b.min.y * 1000)} mm up: it will drop onto the floor when placed.`);
   const frames = partFrames(d);
@@ -77,7 +81,7 @@ export function scrutineer(d: RobotDesign, rules: Rules = DEFAULT_RULES, stats?:
     const slippery = (p.material && material(p.material).friction < 0.15) || p.material === 'rubber';
     const fixedToChassis = rigidGroup(d, root(d).id).includes(p.id);
     if (low < 0.004 && fixedToChassis && !slippery) warn(`${p.label} touches the floor and will drag (use PTFE skids or raise it).`);
-    if (p.wall && p.wall > 50) err(`${p.label}: walls over 50 mm — make it solid instead.`);
+    if (p.wall && p.wall > 50) warn(`${p.label}: walls over 50 mm — it might as well be solid.`);
   }
 
   // Power.
@@ -85,7 +89,7 @@ export function scrutineer(d: RobotDesign, rules: Rules = DEFAULT_RULES, stats?:
   if (!batteries.length) err('No battery: nothing will move.');
   const volts = batteries.length ? Math.max(...batteries.map((x) => x.voltage)) : 0;
   if (new Set(batteries.map((x) => x.voltage)).size > 1) warn('Batteries of different voltages in parallel: the lower ones will be overcharged.');
-  const acts = d.parts.flatMap((p) => (p.joint.type !== 'fixed' && p.joint.actuator ? [{ p, a: p.joint.actuator }] : []));
+  const acts = d.parts.flatMap((p) => { const a = actuatorOf(p); return a ? [{ p, a }] : []; });
   for (const { p, a } of acts) {
     if (a.type === 'pneumatic') {
       const ram = lookup(RAMS, a.ram, 'ram');

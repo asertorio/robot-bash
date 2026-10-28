@@ -1,10 +1,11 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { material } from '../data/materials';
 import { BATTERIES, GEARBOX, MOTORS, RAMS, TANKS, VALVES, WHEELS, lookup, type MotorSpec, type RamSpec } from '../data/parts';
-import { actuatorMass, faceArea, partFrames, partMass, resolveShape, root, shapeHalf, shapePoints, solidThickness, unit } from './assembly';
+import { actuatorMass, faceArea, partFrames, partMass, registerCatalog, resolveShape, root, shapeHalf, solidThickness, unit } from './assembly';
+import { convexPieces, shapeVolume, type Piece } from './shapes';
 import type { ControlState } from './control';
 import { COMPONENT_TOUGHNESS, DAMAGE, HEAT, WHEEL_TOUGHNESS, damageFor, plateToughness, transmission, type Toughness } from './damage';
-import type { ActuatorDef, InputDef, PartDef, RobotDesign, Shape, Vec3 } from './design';
+import type { ActuatorDef, InputDef, PartDef, RobotDesign, Shape } from './design';
 import { DEBRIS_GROUPS, GHOST_GROUPS, robotGroups, wheelBodyGroups, wheelTyreGroups } from './groups';
 import { dcMotor } from './motor';
 import { electronicsMass, gasDensity } from './stats';
@@ -12,14 +13,12 @@ import { mulberry32, qaxis, qconj, qmul, qrotate, twistAngle, vadd, vdot, vlen, 
 
 export type PartKind = 'structure' | 'wheel' | 'component' | 'actuator' | 'electronics';
 
-/** What the renderer needs to draw a part. Shapes match the collider exactly. */
-export type Visual =
-  | { type: 'hull'; points: Vec3[] }
-  | { type: 'box'; half: Vec3 }
-  | { type: 'cylinder'; radius: number; halfHeight: number }
-  | { type: 'cone'; radius: number; halfHeight: number }
-  | { type: 'capsule'; radius: number; halfHeight: number }
-  | { type: 'sphere'; radius: number };
+/** What the renderer draws: the part's real shape, posed relative to its body. */
+export interface Visual {
+  shape: Shape;
+  pos: V3;
+  rot: Q;
+}
 
 export interface Part {
   id: string;
@@ -35,7 +34,9 @@ export interface Part {
   local: V3;
   /** Which body (by jointed part id) it rides on. */
   bodyKey: string;
+  /** First collider of the part (contacts, picking); `extra` holds the rest of its convex pieces. */
   collider: RAPIER.Collider | null;
+  extra: RAPIER.Collider[];
   body: RAPIER.RigidBody | null;
   /** Sits inside: only takes transmitted damage until exposed. */
   internal: boolean;
@@ -135,12 +136,25 @@ export class Robot {
   private electronicsPart: Part;
   private control: ControlState = { left: 0, right: 0, weapon: false, weapon2: false };
   private gait = { left: 0, right: Math.PI };
+  private springs: Array<{ child: BodyInfo; parent: BodyInfo; axis: V3; anchor: V3; joint: 'hinge' | 'slider'; stiffness: number; damping: number }> = [];
+  /** Flamethrowers fitted, and whether each is lit right now. */
+  readonly flames: Array<{ part: Part; def: Extract<NonNullable<PartDef['component']>, { type: 'flamethrower' }>; dir: V3; fuel: number; on: boolean; toggled: boolean; wasPressed: boolean }> = [];
+
+  /** Lit flamethrowers: nozzle position, direction and reach, world space. */
+  activeFlames(): Array<{ origin: V3; dir: V3; range: number }> {
+    return this.flames.filter((f) => f.on && f.part.collider && f.part.body).map((f) => ({
+      origin: f.part.collider!.translation(),
+      dir: qrotate(f.part.body!.rotation(), f.dir),
+      range: f.def.range,
+    }));
+  }
 
   constructor(world: RAPIER.World, design: RobotDesign, index: number, position: V3, yaw: number) {
     this.world = world;
     this.design = design;
     this.index = index;
     this.groups = robotGroups(index);
+    registerCatalog(design);
     this.rng = mulberry32(1234 + index * 7919);
     const paint = hex(design.colour);
     const spawnRot = qaxis({ x: 0, y: 1, z: 0 }, yaw);
@@ -181,23 +195,21 @@ export class Robot {
       const rs = resolveShape(p);
       const centre = vsub(vadd(f.pos, qrotate(f.rot, rs.offset)), info.origin);
       const rot = qmul(f.rot, rs.rot);
-      const desc = colliderFor(rs.shape).setTranslation(centre.x, centre.y, centre.z).setRotation(rot).setMass(partMass(p));
       const part = this.addPart({
         id: p.id, label: p.label, kind: p.role, def: p, local: centre, bodyKey: info.key,
         internal: p.role === 'component',
         toughness: p.role === 'wheel' ? WHEEL_TOUGHNESS : p.role === 'component' ? COMPONENT_TOUGHNESS
           : plateToughness(p.material ?? 'aluminium', p.wall ?? solidThickness(rs.shape), faceArea(rs.shape)),
-        visual: visualFor(rs.shape),
+        visual: { shape: rs.shape, pos: centre, rot },
         colour: p.colour ? hex(p.colour) : p.role === 'wheel' ? 0x1b1b1b : p.role === 'component' ? 0x2c3036
           : p.material && ['ptfe', 'rubber', 'hardox', 'titanium', 'mildSteel'].includes(p.material) && p.parent !== null ? material(p.material).colour : paint,
       });
       part.body = info.body;
       if (p.role === 'wheel') {
         const spec = lookup(WHEELS, p.wheel!, 'wheel');
-        desc.setFriction(spec.grip).setRestitution(0.05);
         // Rapier's cylinder-on-box contact makes resting wheels creep, so the
         // floor sees a sphere of the same radius; other robots see the cylinder.
-        this.attach(part, desc, info.body, wheelBodyGroups(index));
+        this.attachShape(part, rs.shape, centre, rot, partMass(p), info.body, wheelBodyGroups(index), spec.grip, 0.05);
         part.tyre = world.createCollider(
           RAPIER.ColliderDesc.ball(spec.radius).setTranslation(centre.x, centre.y, centre.z).setMass(0.01).setFriction(spec.grip).setRestitution(0.05)
             .setCollisionGroups(wheelTyreGroups(index))
@@ -206,16 +218,20 @@ export class Robot {
         );
         this.byCollider.set(part.tyre.handle, part);
       } else if (p.role === 'component') {
-        desc.setFriction(0.4);
-        this.attach(part, desc, info.body, GHOST_GROUPS);
+        this.attachShape(part, rs.shape, centre, rot, partMass(p), info.body, GHOST_GROUPS, 0.4, 0.1);
         if (p.component!.type === 'battery') this.batteryParts.push(part);
+        if (p.component!.type === 'flamethrower') {
+          const c = p.component!;
+          this.flames.push({ part, def: c, dir: qrotate(f.rot, { x: 0, y: 0, z: 1 }), fuel: c.fuel, on: false, toggled: false, wasPressed: false });
+          // The nozzle is out in the open, not behind armour.
+          part.internal = false;
+        }
         if (p.component!.type === 'gasTank') {
           this.tankParts.push(part);
           this.gasCapacity += lookup(TANKS, p.component!.part, 'tank').capacity;
         }
       } else {
-        desc.setFriction(material(p.material ?? 'aluminium').friction).setRestitution(0.1);
-        this.attach(part, desc, info.body);
+        this.attachShape(part, rs.shape, centre, rot, partMass(p), info.body, this.groups, material(p.material ?? 'aluminium').friction, 0.1);
       }
     }
     this.gasLeft = this.gasCapacity;
@@ -226,8 +242,12 @@ export class Robot {
       const child = this.bodies_.get(p.id)!;
       const parent = child.parent!;
       const f = frames.get(p.id)!;
-      const axis = qrotate(f.rot, unit(p.joint.axis));
       const anchor = vsub(child.origin, parent.origin);
+      if (p.joint.type === 'ball') {
+        child.joint = world.createImpulseJoint(RAPIER.JointData.spherical(anchor, { x: 0, y: 0, z: 0 }), parent.body, child.body, true);
+        continue;
+      }
+      const axis = qrotate(f.rot, unit(p.joint.axis));
       const jd = p.joint.type === 'hinge' ? RAPIER.JointData.revolute(anchor, { x: 0, y: 0, z: 0 }, axis) : RAPIER.JointData.prismatic(anchor, { x: 0, y: 0, z: 0 }, axis);
       const joint = world.createImpulseJoint(jd, parent.body, child.body, true) as RAPIER.RevoluteImpulseJoint;
       let limits: [number, number] | null = null;
@@ -237,6 +257,10 @@ export class Robot {
       child.joint = joint;
       const a = p.joint.actuator;
       if (a) this.addActuator(p, a, child, parent, axis, anchor, limits);
+      if (p.joint.spring) {
+        const k = p.joint.type === 'hinge' ? 180 / Math.PI : 1000;
+        this.springs.push({ child, parent, axis, anchor, joint: p.joint.type, stiffness: p.joint.spring.stiffness * k, damping: p.joint.spring.damping * k });
+      }
     }
 
     // Speed controllers, radio and wiring, in the chassis.
@@ -275,8 +299,8 @@ export class Robot {
     this.actuators.push(act);
   }
 
-  private addPart(p: Omit<Part, 'condition' | 'failed' | 'collider' | 'body' | 'exposed' | 'detached' | 'announced'>): Part {
-    const part: Part = { ...p, condition: 1, failed: false, collider: null, body: null, exposed: false, detached: false, announced: 1 };
+  private addPart(p: Omit<Part, 'condition' | 'failed' | 'collider' | 'extra' | 'body' | 'exposed' | 'detached' | 'announced'>): Part {
+    const part: Part = { ...p, condition: 1, failed: false, collider: null, extra: [], body: null, exposed: false, detached: false, announced: 1 };
     this.parts.push(part);
     return part;
   }
@@ -288,6 +312,28 @@ export class Robot {
     if (part.collider) this.byCollider.delete(part.collider.handle);
     part.collider = c;
     this.byCollider.set(c.handle, part);
+  }
+
+  /** Colliders for every convex piece of a shape, sharing the part's mass by volume. */
+  private attachShape(part: Part, shape: Shape, centre: V3, rot: Q, mass: number, body: RAPIER.RigidBody, groups: number, friction: number, restitution: number) {
+    const pieces = convexPieces(shape);
+    const vols = pieces.map(pieceVolume);
+    const total = vols.reduce((a, b) => a + b, 0) || 1;
+    pieces.forEach((piece, i) => {
+      const { desc, offset } = pieceCollider(piece);
+      const at = vadd(centre, qrotate(rot, offset));
+      desc.setTranslation(at.x, at.y, at.z).setRotation(rot).setMass(Math.max(1e-4, (mass * vols[i]) / total)).setFriction(friction).setRestitution(restitution);
+      desc.setCollisionGroups(groups);
+      if (groups !== GHOST_GROUPS) desc.setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(DAMAGE.EVENT_THRESHOLD);
+      const c = this.world.createCollider(desc, body);
+      this.byCollider.set(c.handle, part);
+      if (i === 0) part.collider = c; else part.extra.push(c);
+    });
+  }
+
+  /** All of a part's colliders. */
+  collidersOf(p: Part): RAPIER.Collider[] {
+    return p.collider ? [p.collider, ...p.extra] : [...p.extra];
   }
 
   partFor(collider: RAPIER.Collider): Part | undefined {
@@ -357,6 +403,25 @@ export class Robot {
     this.gait.right += 2 * Math.PI * GAIT_HZ * c.right * dt;
     let amps = 0;
     for (const a of this.actuators) amps += this.drive(a, c, voltage, dt);
+    for (const sp of this.springs) {
+      if (!sp.child.joint) continue;
+      const m = measure(sp);
+      const f = -sp.stiffness * m.position - sp.damping * m.speed;
+      if (sp.joint === 'hinge') {
+        const t = vscale(m.axis, f * dt);
+        sp.child.body.applyTorqueImpulse(t, true);
+        sp.parent.body.applyTorqueImpulse(vscale(t, -1), true);
+      } else {
+        const imp = vscale(m.axis, f * dt), at = sp.child.body.translation();
+        sp.child.body.applyImpulseAtPoint(imp, at, true);
+        sp.parent.body.applyImpulseAtPoint(vscale(imp, -1), at, true);
+      }
+    }
+    for (const fl of this.flames) {
+      const want = this.command(fl, c) > 0.5;
+      fl.on = want && this.powered && fl.fuel > 0 && !fl.part.failed && !fl.part.detached;
+      if (fl.on) fl.fuel = Math.max(0, fl.fuel - 0.06 * dt);
+    }
     for (const t of this.tankParts) if (t.condition < 0.5 && this.gasLeft > 0) this.gasLeft = Math.max(0, this.gasLeft - 40 * (1 - t.condition / 0.5) * dt);
     // The battery can only give so much; beyond that the voltage sags.
     this.current = Math.min(amps, this.battery.maxCurrent);
@@ -369,7 +434,7 @@ export class Robot {
   }
 
   /** The actuator's command: −1..1 for analog/gait inputs, 0/1 for buttons. */
-  private command(a: Actuator, c: ControlState): number {
+  private command(a: { def: { input: InputDef }; toggled: boolean; wasPressed: boolean }, c: ControlState): number {
     const i = a.def.input;
     const scale = i.scale ?? 1;
     switch (i.source) {
@@ -613,24 +678,25 @@ export class Robot {
         if (!gone.includes(q.bodyKey) || q.detached) continue;
         q.detached = true;
         if (q.tyre) { this.byCollider.delete(q.tyre.handle); this.world.removeCollider(q.tyre, true); q.tyre = null; }
-        q.collider?.setCollisionGroups(DEBRIS_GROUPS);
+        for (const c of this.collidersOf(q)) c.setCollisionGroups(DEBRIS_GROUPS);
       }
       this.exposeNear(p);
       return true;
     }
-    if (!p.collider || p.kind !== 'structure') return false;
-    // A fixed panel: recreate it as its own body where it was.
-    const old = p.collider;
-    const pos = old.translation(), rot = old.rotation();
+    if (!p.collider || p.kind !== 'structure' || !p.visual) return false;
+    // A fixed part: recreate it as its own body where it was.
+    const br = info.body.rotation();
+    const pos = vadd(info.body.translation(), qrotate(br, p.visual.pos));
+    const rot = qmul(br, p.visual.rot);
     const vel = info.body.velocityAtPoint(pos);
-    const desc = colliderFor(resolveShape(p.def!).shape).setMass(partMass(p.def!)).setFriction(0.4);
-    this.byCollider.delete(old.handle);
-    this.world.removeCollider(old, true);
+    for (const c of this.collidersOf(p)) { this.byCollider.delete(c.handle); this.world.removeCollider(c, true); }
     p.collider = null;
+    p.extra = [];
     const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(pos.x, pos.y, pos.z).setRotation(rot).setLinvel(vel.x, vel.y, vel.z));
     p.body = body;
     p.detached = true;
-    this.attach(p, desc, body, DEBRIS_GROUPS);
+    p.visual = { shape: p.visual.shape, pos: { x: 0, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } };
+    this.attachShape(p, p.visual.shape, p.visual.pos, p.visual.rot, partMass(p.def!), body, DEBRIS_GROUPS, 0.4, 0.1);
     this.exposeNear(p);
     return true;
   }
@@ -642,9 +708,11 @@ export class Robot {
       if (!q.internal || q.exposed || !q.collider || q.bodyKey !== lost.bodyKey) continue;
       if (vlen(vsub(q.local, lost.local)) > reach) continue;
       q.exposed = true;
-      q.collider.setCollisionGroups(this.groups);
-      q.collider.setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS);
-      q.collider.setContactForceEventThreshold(DAMAGE.EVENT_THRESHOLD);
+      for (const c of this.collidersOf(q)) {
+        c.setCollisionGroups(this.groups);
+        c.setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS);
+        c.setContactForceEventThreshold(DAMAGE.EVENT_THRESHOLD);
+      }
     }
   }
 
@@ -665,7 +733,7 @@ export class Robot {
       let touching = false;
       for (const q of this.parts) {
         if (touching || q.detached || q.bodyKey !== a.child.key) continue;
-        for (const c of [q.tyre, q.collider]) {
+        for (const c of [q.tyre, ...this.collidersOf(q)]) {
           if (!c || touching) continue;
           this.world.contactPairsWith(c, (other) => {
             if (touching) return;
@@ -683,31 +751,43 @@ export class Robot {
   }
 }
 
-function colliderFor(s: Shape): RAPIER.ColliderDesc {
+/** A Rapier collider for one convex piece, and where it sits in the shape frame. */
+function pieceCollider(p: Piece): { desc: RAPIER.ColliderDesc; offset: V3 } {
+  const zero = { x: 0, y: 0, z: 0 };
+  if (p.kind === 'box') return { desc: RAPIER.ColliderDesc.cuboid(p.half[0], p.half[1], p.half[2]), offset: { x: p.centre[0], y: p.centre[1], z: p.centre[2] } };
+  if (p.kind === 'hull') {
+    const desc = RAPIER.ColliderDesc.convexHull(new Float32Array(p.points.flat()));
+    if (!desc) throw new Error('A shape needs some thickness: its points are all flat or there are fewer than 4.');
+    return { desc, offset: zero };
+  }
+  const s = p.shape;
   switch (s.type) {
-    case 'box': return RAPIER.ColliderDesc.cuboid(s.size[0] / 2, s.size[1] / 2, s.size[2] / 2);
-    case 'cylinder': return RAPIER.ColliderDesc.cylinder(s.length / 2, s.radius);
-    case 'cone': return RAPIER.ColliderDesc.cone(s.length / 2, s.radius);
-    case 'sphere': return RAPIER.ColliderDesc.ball(s.radius);
-    case 'capsule': return RAPIER.ColliderDesc.capsule(s.length / 2, s.radius);
-    default: {
-      const desc = RAPIER.ColliderDesc.convexHull(new Float32Array(shapePoints(s)!.flat()));
-      if (!desc) throw new Error('A hull needs at least 4 points that aren\'t all flat.');
-      return desc;
-    }
+    case 'box': return { desc: RAPIER.ColliderDesc.cuboid(s.size[0] / 2, s.size[1] / 2, s.size[2] / 2), offset: zero };
+    case 'cylinder': return { desc: RAPIER.ColliderDesc.cylinder(s.length / 2, s.radius), offset: zero };
+    case 'cone': return { desc: RAPIER.ColliderDesc.cone(s.length / 2, s.radius), offset: zero };
+    case 'sphere': return { desc: RAPIER.ColliderDesc.ball(s.radius), offset: zero };
+    case 'capsule': return { desc: RAPIER.ColliderDesc.capsule(s.length / 2, s.radius), offset: zero };
   }
 }
 
-function visualFor(s: Shape): Visual {
-  switch (s.type) {
-    case 'box': return { type: 'box', half: [s.size[0] / 2, s.size[1] / 2, s.size[2] / 2] };
-    case 'cylinder': return { type: 'cylinder', radius: s.radius, halfHeight: s.length / 2 };
-    case 'cone': return { type: 'cone', radius: s.radius, halfHeight: s.length / 2 };
-    case 'sphere': return { type: 'sphere', radius: s.radius };
-    case 'capsule': return { type: 'capsule', radius: s.radius, halfHeight: s.length / 2 };
-    default: return { type: 'hull', points: shapePoints(s)! };
-  }
+function pieceVolume(p: Piece): number {
+  if (p.kind === 'box') return 8 * p.half[0] * p.half[1] * p.half[2];
+  if (p.kind === 'prim') return shapeVolume(p.shape);
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  for (const q of p.points) for (let i = 0; i < 3; i++) { min[i] = Math.min(min[i], q[i]); max[i] = Math.max(max[i], q[i]); }
+  return Math.max(1e-9, (max[0] - min[0]) * (max[1] - min[1]) * (max[2] - min[2]) * 0.6);
 }
 
 const hex = (c: string): number => parseInt(c.slice(1), 16);
 const lower = (s: string): string => s.charAt(0).toLowerCase() + s.slice(1);
+
+/** Joint position and speed (rad or m, rad/s or m/s) and its world axis. */
+function measure(j: { child: { body: RAPIER.RigidBody }; parent: { body: RAPIER.RigidBody }; axis: V3; anchor: V3; joint: 'hinge' | 'slider' }) {
+  const pRot = j.parent.body.rotation();
+  const axis = qrotate(pRot, j.axis);
+  if (j.joint === 'hinge') {
+    return { axis, speed: vdot(vsub(j.child.body.angvel(), j.parent.body.angvel()), axis), position: twistAngle(qmul(qconj(pRot), j.child.body.rotation()), j.axis) };
+  }
+  const rel = qrotate(qconj(pRot), vsub(j.child.body.translation(), j.parent.body.translation()));
+  return { axis, position: vdot(vsub(rel, j.anchor), j.axis), speed: vdot(vsub(j.child.body.linvel(), j.parent.body.linvel()), axis) };
+}

@@ -5,7 +5,7 @@ const n = (v: number, d = 0) => v.toLocaleString('en-GB', { minimumFractionDigit
 /** Human-readable stat lines for a robot card: [label, value, isProblem]. */
 export function statLines(s: RobotStats, weightLimit = 100): Array<[string, string, boolean?]> {
   const lines: Array<[string, string, boolean?]> = [
-    ['Weight', `${n(s.mass, 1)} kg of ${weightLimit} kg`, s.mass > weightLimit],
+    ['Weight', Number.isFinite(weightLimit) ? `${n(s.mass, 1)} kg of ${weightLimit} kg` : `${n(s.mass, 1)} kg (no limit)`, s.mass > weightLimit],
     ['Cost', `£${n(s.cost)}`],
     ['Drive', s.locomotion, s.locomotion === 'none'],
   ];

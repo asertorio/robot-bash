@@ -1,11 +1,14 @@
 import { deleteDesign, loadDesigns, parseDesign, saveDesign } from '../data/garage';
-import { MATERIALS } from '../data/materials';
-import { BATTERIES, MOTORS, RAMS, TANKS, VALVES, WHEELS } from '../data/parts';
+import { MATERIALS, type Material } from '../data/materials';
+import { BATTERIES, MOTORS, RAMS, TANKS, VALVES, WHEELS, type BatterySpec, type MotorSpec, type RamSpec, type TankSpec, type ValveSpec, type WheelSpec } from '../data/parts';
 import { TEMPLATES } from '../data/templates';
-import { childrenOf, partMass, root } from '../sim/assembly';
+import { actuatorOf, childrenOf, partMass, registerCatalog, root } from '../sim/assembly';
+import { convexPieces, shapeHalf } from '../sim/shapes';
+import { importModel } from './importModel';
+import { OUTLINE_PRESETS, PROFILE_PRESETS, sketchEditor } from './sketch';
 import { NEW_PART_KINDS, blankDesign, cloneDesign, mirrorPart, newParts, removePart, validParents, type NewPartKind } from '../sim/build';
 import { conditionLabel } from '../sim/damage';
-import type { ActuatorDef, InputDef, InputSource, JointDef, PartDef, RobotDesign, Shape, Vec3 } from '../sim/design';
+import type { ActuatorDef, CustomCatalog, InputDef, InputSource, JointDef, PartDef, RobotDesign, Shape, Vec3 } from '../sim/design';
 import type { Match } from '../sim/match';
 import { BUDGETS, DEFAULT_RULES, WEIGHT_CLASSES, isLegal, scrutineer, type Rules } from '../sim/rules';
 import { computeStats } from '../sim/stats';
@@ -124,12 +127,18 @@ export class Garage {
 
   // ---------------------------------------------------------------- field helpers
 
-  private num(label: string, value: number, set: (v: number) => void, o: { min: number; max: number; step: number; unit?: string; after?: () => void }) {
-    const range = h('input', { type: 'range', min: o.min, max: o.max, step: o.step, value });
-    const box = h('input', { type: 'number', class: 'numbox', min: o.min, max: o.max, step: o.step, value });
+  /**
+   * A number with a slider for the usual range — but no limits: type any
+   * value into the box. `floor` only stops physically meaningless values (a
+   * negative size).
+   */
+  private num(label: string, value: number, set: (v: number) => void, o: { min: number; max: number; step: number; unit?: string; after?: () => void; floor?: number }) {
+    const range = h('input', { type: 'range', min: Math.min(o.min, value), max: Math.max(o.max, value), step: o.step, value });
+    const box = h('input', { type: 'number', class: 'numbox', step: 'any', value });
     const apply = (raw: string) => {
-      const v = Math.min(o.max, Math.max(o.min, Number(raw)));
+      let v = Number(raw);
       if (!Number.isFinite(v)) return;
+      if (o.floor !== undefined) v = Math.max(o.floor, v);
       set(v);
       o.after?.();
       this.changed();
@@ -141,7 +150,7 @@ export class Garage {
 
   /** Lengths are stored in metres but builders think in millimetres. */
   private mm(label: string, metres: number, set: (m: number) => void, min: number, max: number, after?: () => void) {
-    return this.num(label, Math.round(metres * 1000), (v) => set(v / 1000), { min, max, step: 5, unit: 'mm', after });
+    return this.num(label, Math.round(metres * 10000) / 10, (v) => set(v / 1000), { min, max, step: 1, unit: 'mm', after, floor: min > 0 ? 0.5 : undefined });
   }
 
   private sel<T extends string>(label: string, options: Array<[T, string]>, value: T, set: (v: T) => void, structural = false) {
@@ -210,9 +219,9 @@ export class Garage {
     if (!d.parts.some((p) => p.id === this.selected)) this.selected = root(d).id;
     const sel = d.parts.find((p) => p.id === this.selected)!;
     const rows: HTMLElement[] = [];
-    const icon = (p: PartDef) => (p.role === 'wheel' ? '◎' : p.role === 'component' ? '▪' : p.joint.type === 'hinge' ? '↻' : p.joint.type === 'slider' ? '⇕' : '▢');
+    const icon = (p: PartDef) => (p.role === 'wheel' ? '◎' : p.role === 'component' ? '▪' : p.joint.type === 'hinge' ? '↻' : p.joint.type === 'slider' ? '⇕' : p.joint.type === 'ball' ? '◍' : '▢');
     const walk = (p: PartDef, depth: number) => {
-      const act = p.joint.type !== 'fixed' && p.joint.actuator ? ` · ${p.joint.actuator.type}` : '';
+      const act = actuatorOf(p) ? ` · ${actuatorOf(p)!.type}` : '';
       rows.push(h('button', {
         class: `tree-row${p.id === this.selected ? ' on' : ''}`, style: `padding-left:${8 + depth * 14}px`,
         onclick: () => this.select(p.id),
@@ -227,7 +236,7 @@ export class Garage {
     const add = () => {
       const made = newParts(d, addSel.value as NewPartKind, this.selected);
       d.parts.push(...made);
-      if (made.some((p) => p.joint.type !== 'fixed' && p.joint.actuator?.type === 'pneumatic') && !d.parts.some((p) => p.component?.type === 'gasTank')) {
+      if (made.some((p) => actuatorOf(p)?.type === 'pneumatic') && !d.parts.some((p) => p.component?.type === 'gasTank')) {
         d.parts.push(...newParts(d, 'gasTank', root(d).id));
       }
       this.selected = made[0].id;
@@ -268,7 +277,7 @@ export class Garage {
     // What it is.
     if (p.role === 'structure') out.push(...this.shapeFields(p));
     if (p.role === 'wheel') {
-      out.push(this.sel('Wheel', Object.values(WHEELS).map((w) => [w.id, `${w.name} — grip ${w.grip}, ${w.mass} kg`] as [string, string]), p.wheel!, (v) => (p.wheel = v)));
+      out.push(...this.catalogSel('Wheel', 'wheels', p.wheel!, (v) => (p.wheel = v), (w: WheelSpec) => `${w.name} — Ø${Math.round(w.radius * 2000)} mm, grip ${w.grip}, ${w.mass} kg`));
     }
     if (p.role === 'component') out.push(...this.componentFields(p));
     out.push(h('label', { class: 'field wide' }, h('span', { class: 'flabel' }, 'Paint'),
@@ -294,7 +303,11 @@ export class Garage {
 
   private shapeFields(p: PartDef): HTMLElement[] {
     const s = p.shape!;
-    const types: Array<[Shape['type'], string]> = [['box', 'Box'], ['wedge', 'Wedge'], ['cylinder', 'Cylinder / disc'], ['cone', 'Cone'], ['sphere', 'Sphere'], ['capsule', 'Capsule / rod'], ['hull', 'Custom hull (points)']];
+    const types: Array<[Shape['type'], string]> = [
+      ['box', 'Box'], ['wedge', 'Wedge'], ['cylinder', 'Cylinder / disc'], ['cone', 'Cone'], ['sphere', 'Sphere'], ['capsule', 'Capsule / rod'],
+      ['extrude', 'Drawn outline (extruded) — any 2D shape'], ['lathe', 'Drawn profile (spun) — drums, domes, bells'],
+      ['mesh', 'Imported 3D model (STL / OBJ)'], ['hull', 'Convex hull of points'],
+    ];
     const out: HTMLElement[] = [];
     out.push(this.sel('Shape', types, s.type, (t) => (p.shape = convertShape(s, t)), true));
     switch (s.type) {
@@ -319,35 +332,85 @@ export class Garage {
         } }, JSON.stringify(s.points)), err);
         break;
       }
+      case 'extrude': {
+        const planes: Array<['top' | 'side' | 'front', string]> = [['top', 'Drawn from above, extruded up'], ['side', 'Drawn from the side, extruded across'], ['front', 'Drawn from the front, extruded back']];
+        const plane = s.plane ?? 'top';
+        out.push(this.sel('Drawing plane', planes, plane, (v) => (s.plane = v), true));
+        out.push(this.mm('Thickness', s.depth, (v) => (s.depth = v), 1, 1000));
+        const axes: Record<string, [string, string]> = { top: ['left', 'forward'], side: ['forward', 'up'], front: ['left', 'up'] };
+        out.push(this.presetRow(OUTLINE_PRESETS, (pts) => (s.outline = pts)));
+        out.push(sketchEditor(s.outline, { mode: 'outline', axes: axes[plane], onChange: (pts) => { s.outline = pts; this.changed(); } }));
+        break;
+      }
+      case 'lathe': {
+        out.push(this.num('Smoothness', s.segments ?? 24, (v) => (s.segments = Math.round(v)), { min: 8, max: 48, step: 1, unit: 'sides', floor: 8 }));
+        out.push(this.presetRow(PROFILE_PRESETS, (pts) => (s.profile = pts)));
+        out.push(sketchEditor(s.profile, { mode: 'profile', axes: ['radius', 'up (part Y)'], onChange: (pts) => { s.profile = pts; this.changed(); } }));
+        break;
+      }
+      case 'mesh': {
+        const status = h('div', { class: 'hint' }, `${s.indices.length / 3} triangles · physics as ${convexPieces(s).length} boxes`);
+        const units = h('select', {}, h('option', { value: '0.001' }, 'File is in mm'), h('option', { value: '0.01' }, 'File is in cm'), h('option', { value: '1' }, 'File is in m'), h('option', { value: '0.0254' }, 'File is in inches'));
+        const file = h('input', { type: 'file', accept: '.stl,.obj' });
+        file.addEventListener('change', async () => {
+          const f = file.files?.[0];
+          if (!f) return;
+          try {
+            const m = await importModel(f, Number(units.value));
+            s.vertices = m.vertices; s.indices = m.indices;
+            if (!p.label || p.label === 'Model') p.label = f.name.replace(/\.[^.]+$/, '');
+            this.flash(`Imported ${m.triangles} triangles, ${m.size.map((x) => Math.round(x * 1000)).join(' × ')} mm.`);
+            this.changed(true);
+          } catch (e) { status.textContent = (e as Error).message; status.className = 'err'; }
+        });
+        out.push(h('label', { class: 'field wide' }, h('span', { class: 'flabel' }, 'Units'), units));
+        out.push(h('label', { class: 'field wide' }, h('span', { class: 'flabel' }, 'Model file'), file));
+        out.push(this.mm('Physics detail', s.voxel ?? 0, (v) => (s.voxel = v > 0 ? v : undefined), 0, 200));
+        out.push(h('div', { class: 'hint' }, 'The physics approximates the model with boxes this size (0 = automatic). Smaller is more accurate but slower.'));
+        out.push(status);
+        break;
+      }
     }
-    const materials = Object.values(MATERIALS).map((m) => [m.id, `${m.name} — ${m.density} kg/m³, £${m.costPerKg}/kg`] as [string, string]);
-    out.push(this.sel('Material', materials, p.material ?? 'aluminium', (v) => (p.material = v)));
+    out.push(...this.catalogSel('Material', 'materials', p.material ?? 'aluminium', (v) => (p.material = v), (m: Material) => `${m.name} — ${m.density} kg/m³, £${m.costPerKg}/kg`));
     out.push(this.sel('Construction', [['shell', 'Hollow shell (plate)'], ['solid', 'Solid']], p.wall ? 'shell' : 'solid', (v) => { if (v === 'solid') delete p.wall; else p.wall = 5; }, true));
-    if (p.wall) out.push(this.num('Wall thickness', p.wall, (v) => (p.wall = v), { min: 0.5, max: 50, step: 0.5, unit: 'mm' }));
+    if (p.wall) out.push(this.num('Wall thickness', p.wall, (v) => (p.wall = v), { min: 0.5, max: 50, step: 0.5, unit: 'mm', floor: 0.1 }));
     return out;
   }
 
   private componentFields(p: PartDef): HTMLElement[] {
     const c = p.component!;
-    if (c.type === 'battery') return [this.sel('Battery', Object.values(BATTERIES).map((b) => [b.id, `${b.name} — ${b.capacity} Wh, ${b.maxCurrent} A, ${b.mass} kg`] as [string, string]), c.part, (v) => (c.part = v))];
-    if (c.type === 'gasTank') return [this.sel('Gas bottle', Object.values(TANKS).map((t) => [t.id, `${t.name} — ${t.capacity} g CO2, ${t.mass} kg`] as [string, string]), c.part, (v) => (c.part = v))];
-    return [this.num('Mass', c.mass, (v) => (c.mass = v), { min: 0.1, max: 60, step: 0.1, unit: 'kg' })];
+    if (c.type === 'battery') return this.catalogSel('Battery', 'batteries', c.part, (v) => (c.part = v), (b: BatterySpec) => `${b.name} — ${b.voltage} V, ${b.capacity} Wh, ${b.maxCurrent} A, ${b.mass} kg`);
+    if (c.type === 'gasTank') return this.catalogSel('Gas bottle', 'tanks', c.part, (v) => (c.part = v), (t: TankSpec) => `${t.name} — ${t.capacity} g CO2, ${t.mass} kg`);
+    if (c.type === 'flamethrower') {
+      return [
+        h('div', { class: 'hint' }, 'Shoots flame along this part\'s forward (+Z) direction. A banned weapon: Open class only.'),
+        this.mm('Reach', c.range, (v) => (c.range = v), 100, 2000),
+        this.num('Fuel', c.fuel, (v) => (c.fuel = v), { min: 0.1, max: 10, step: 0.1, unit: 'kg', floor: 0 }),
+        ...this.inputFields({ input: c.input } as ActuatorDef),
+      ];
+    }
+    return [this.num('Mass', c.mass, (v) => (c.mass = v), { min: 0.1, max: 60, step: 0.1, unit: 'kg', floor: 0 })];
   }
 
   private jointFields(p: PartDef): HTMLElement[] {
     const out: HTMLElement[] = [h('h4', {}, 'Joint')];
-    const types: Array<[JointDef['type'], string]> = p.role === 'wheel' ? [['hinge', 'Hinge (axle)']] : [['fixed', 'Fixed (bolted on)'], ['hinge', 'Hinge (rotates)'], ['slider', 'Slider (moves in a line)']];
+    const types: Array<[JointDef['type'], string]> = p.role === 'wheel' ? [['hinge', 'Hinge (axle)']]
+      : [['fixed', 'Fixed (bolted on)'], ['hinge', 'Hinge (rotates)'], ['slider', 'Slider (moves in a line)'], ['ball', 'Ball joint (swings any way — flails, chains)']];
     out.push(this.sel('Type', types, p.joint.type, (t) => {
       const prev = p.joint;
-      const axis: Vec3 = prev.type === 'fixed' ? [1, 0, 0] : prev.axis;
-      p.joint = t === 'fixed' ? { type: 'fixed' } : t === 'hinge' ? { type: 'hinge', axis, limits: [-45, 45] } : { type: 'slider', axis: [0, 1, 0], limits: [0, 100] };
+      const axis: Vec3 = prev.type === 'hinge' || prev.type === 'slider' ? prev.axis : [1, 0, 0];
+      p.joint = t === 'fixed' ? { type: 'fixed' } : t === 'ball' ? { type: 'ball' } : t === 'hinge' ? { type: 'hinge', axis, limits: [-45, 45] } : { type: 'slider', axis: [0, 1, 0], limits: [0, 100] };
     }, true));
     const j = p.joint;
-    if (j.type === 'fixed') return out;
-    const axes: Array<[string, string]> = [['1,0,0', '+X (left)'], ['-1,0,0', '−X (right)'], ['0,1,0', '+Y (up)'], ['0,-1,0', '−Y (down)'], ['0,0,1', '+Z (forward)'], ['0,0,-1', '−Z (back)']];
+    if (j.type === 'fixed' || j.type === 'ball') return out;
+    const axes: Array<[string, string]> = [['1,0,0', '+X (left)'], ['-1,0,0', '−X (right)'], ['0,1,0', '+Y (up)'], ['0,-1,0', '−Y (down)'], ['0,0,1', '+Z (forward)'], ['0,0,-1', '−Z (back)'], ['custom', 'Any direction…']];
     const key = j.axis.join(',');
-    if (!axes.some(([k]) => k === key)) axes.push([key, `custom (${key})`]);
-    out.push(this.sel('Axis', axes, key, (v) => (j.axis = v.split(',').map(Number) as Vec3)));
+    const preset = axes.some(([k]) => k === key);
+    out.push(this.sel('Axis', axes, preset ? key : 'custom', (v) => { if (v !== 'custom') j.axis = v.split(',').map(Number) as Vec3; else if (preset) j.axis = [1, 1, 0]; }, true));
+    if (!preset) {
+      out.push(h('div', { class: 'hint' }, 'Axis direction in this part\'s frame (any numbers; it\'s normalised).'));
+      (['X', 'Y', 'Z'] as const).forEach((n, k) => out.push(this.num(`Axis ${n}`, j.axis[k], (v) => (j.axis[k] = v), { min: -1, max: 1, step: 0.05 })));
+    }
     if (j.type === 'hinge') {
       out.push(this.sel('Range', [['limited', 'Limited'], ['free', 'Spins freely']], j.limits ? 'limited' : 'free', (v) => { if (v === 'free') delete j.limits; else j.limits = [-45, 45]; }, true));
       if (j.limits) {
@@ -359,15 +422,23 @@ export class Garage {
       out.push(this.num('Min travel', lim[0], (v) => (lim[0] = v), { min: -1000, max: 1000, step: 5, unit: 'mm' }), this.num('Max travel', lim[1], (v) => (lim[1] = v), { min: -1000, max: 1000, step: 5, unit: 'mm' }));
     }
 
+    out.push(h('h4', {}, 'Spring'));
+    const unitK = j.type === 'hinge' ? 'N·m/°' : 'N/mm';
+    out.push(this.sel('Spring', [['none', 'None'], ['spring', 'Spring back to the built position']], j.spring ? 'spring' : 'none', (v) => { if (v === 'none') delete j.spring; else j.spring = { stiffness: j.type === 'hinge' ? 2 : 20, damping: j.type === 'hinge' ? 0.05 : 0.5 }; }, true));
+    if (j.spring) {
+      const sp = j.spring;
+      out.push(this.num('Stiffness', sp.stiffness, (v) => (sp.stiffness = v), { min: 0, max: j.type === 'hinge' ? 50 : 500, step: 0.1, unit: unitK, floor: 0 }));
+      out.push(this.num('Damping', sp.damping, (v) => (sp.damping = v), { min: 0, max: j.type === 'hinge' ? 2 : 20, step: 0.01, unit: `${unitK}·s`, floor: 0 }));
+    }
+
     out.push(h('h4', {}, 'Actuator'));
     const a = j.actuator;
     const kinds: Array<[string, string]> = [['none', 'None (free)'], ...(j.type === 'hinge' ? [['motor', 'DC motor (spins)'] as [string, string]] : []), ['pneumatic', 'Pneumatic ram'], ['servo', 'Servo (holds a position)']];
     out.push(this.sel('Driven by', kinds, a?.type ?? 'none', (v) => (j.actuator = defaultActuator(v, a?.input)), true));
     if (!a) return out;
-    const motors = Object.values(MOTORS).map((m) => [m.id, `${m.name} — ${m.stallTorque} N·m, ${fmt(m.freeSpeed)} rpm, ${m.mass} kg`] as [string, string]);
     if (a.type === 'motor' || a.type === 'servo') {
-      out.push(this.sel('Motor', motors, a.motor, (v) => (a.motor = v)));
-      out.push(this.num('Gear reduction', a.gear, (v) => (a.gear = v), { min: 1, max: 200, step: 0.5, unit: ': 1' }));
+      out.push(...this.catalogSel('Motor', 'motors', a.motor, (v) => (a.motor = v), (m: MotorSpec) => `${m.name} — ${m.voltage} V, ${m.stallTorque} N·m, ${fmt(m.freeSpeed)} rpm, ${m.mass} kg`));
+      out.push(this.num('Gear reduction', a.gear, (v) => (a.gear = v), { min: 1, max: 200, step: 0.5, unit: ': 1', floor: 0.01 }));
     }
     if (a.type === 'servo') {
       const unit = j.type === 'hinge' ? '°' : 'mm';
@@ -376,9 +447,9 @@ export class Garage {
       out.push(this.num('Position at +1', a.targets[2], (v) => (a.targets[2] = v), { min: -360, max: 360, step: 1, unit }));
     }
     if (a.type === 'pneumatic') {
-      out.push(this.sel('Ram', Object.values(RAMS).map((r) => [r.id, `${r.name} — max ${r.maxPressure} bar, ${r.mass} kg`] as [string, string]), a.ram, (v) => (a.ram = v)));
-      out.push(this.sel('Valve', Object.values(VALVES).map((v) => [v.id, `${v.name} — ${Math.round(v.timeConstant * 1000)} ms${v.maxRate ? ', flow-limited' : ''}`] as [string, string]), a.valve, (v) => (a.valve = v)));
-      out.push(this.num('Pressure', a.pressure, (v) => (a.pressure = v), { min: 2, max: 60, step: 1, unit: 'bar' }));
+      out.push(...this.catalogSel('Ram', 'rams', a.ram, (v) => (a.ram = v), (r: RamSpec) => `${r.name} — ${r.bore} mm bore, ${r.stroke} mm stroke, max ${r.maxPressure} bar`));
+      out.push(...this.catalogSel('Valve', 'valves', a.valve, (v) => (a.valve = v), (v: ValveSpec) => `${v.name} — ${Math.round(v.timeConstant * 1000)} ms${v.maxRate ? ', flow-limited' : ''}`));
+      out.push(this.num('Pressure', a.pressure, (v) => (a.pressure = v), { min: 2, max: 60, step: 1, unit: 'bar', floor: 0 }));
       if (j.type === 'hinge') out.push(this.mm('Lever arm', a.leverArm, (v) => (a.leverArm = v), 10, 500));
     }
     out.push(...this.inputFields(a));
@@ -409,6 +480,51 @@ export class Garage {
       out.push(this.num('Phase', i.phase ?? 0, (v) => (i.phase = v), { min: -360, max: 360, step: 15, unit: '°' }));
     }
     return out;
+  }
+
+  private presetRow(presets: Record<string, Array<[number, number]>>, apply: (pts: Array<[number, number]>) => void) {
+    const s = h('select', { onchange: () => { if (s.value) { apply(presets[s.value].map((q) => [q[0], q[1]])); this.changed(true); } } },
+      h('option', { value: '' }, 'Start from a preset…'), ...Object.keys(presets).map((k) => h('option', { value: k }, k)));
+    return h('label', { class: 'field wide' }, h('span', { class: 'flabel' }, 'Preset'), s);
+  }
+
+  /**
+   * A catalogue picker that also lets you make your own part: "New custom…"
+   * copies the current spec into the design's own catalogue, where every
+   * number is editable.
+   */
+  private catalogSel<T extends { id: string; name: string }>(label: string, kind: keyof CustomCatalog, value: string, set: (id: string) => void, describe: (spec: T) => string): HTMLElement[] {
+    const table = CATALOG_TABLES[kind] as unknown as Record<string, T>;
+    const d = this.draft;
+    const mine = d.catalog?.[kind] as Record<string, T> | undefined;
+    const options: Array<[string, string]> = Object.values(table).map((t) => [t.id, `${mine?.[t.id] ? '★ ' : ''}${describe(t)}`]);
+    options.push(['__new', '＋ New custom part (copy this one)…']);
+    const out: HTMLElement[] = [this.sel(label, options, value, (v) => {
+      if (v !== '__new') { set(v); return; }
+      const base = table[value] ?? Object.values(table)[0];
+      const id = `custom-${kind}-${Date.now().toString(36)}`;
+      const spec = { ...JSON.parse(JSON.stringify(base)), id, name: `Custom ${base.name}` } as T;
+      d.catalog ??= {};
+      ((d.catalog[kind] ??= {}) as unknown as Record<string, T>)[id] = spec;
+      registerCatalog(d);
+      set(id);
+    }, true)];
+    const spec = mine?.[value];
+    if (spec) out.push(this.specEditor(spec as unknown as Record<string, unknown>));
+    return out;
+  }
+
+  private specEditor(spec: Record<string, unknown>): HTMLElement {
+    const rows: HTMLElement[] = [h('div', { class: 'hint' }, 'Your own part — set any value you like.')];
+    rows.push(h('label', { class: 'field wide' }, h('span', { class: 'flabel' }, 'Name'),
+      h('input', { type: 'text', value: String(spec.name), oninput: (e: Event) => { spec.name = (e.target as HTMLInputElement).value; this.changed(); } })));
+    for (const [key, val] of Object.entries(spec)) {
+      if (typeof val !== 'number' || key === 'colour') continue;
+      const [label, unit, scale] = SPEC_FIELDS[key] ?? [key, '', 1];
+      rows.push(this.num(label, val * scale, (v) => (spec[key] = v / scale), { min: 0, max: Math.max(1, val * scale * 4), step: 0.01, unit, floor: 0 }));
+    }
+    if ('sourcing' in spec) rows.push(this.sel('Availability', [['common', 'Off the shelf'], ['specialist', 'Specialist'], ['custom', 'One-off']], spec.sourcing as 'common', (v) => (spec.sourcing = v)));
+    return h('div', { class: 'spec' }, ...rows);
   }
 
   private vec3mm(labels: [string, string, string], v: Vec3, min: number, max: number): HTMLElement[] {
@@ -482,14 +598,14 @@ export class Garage {
 }
 
 /** Change a shape's type, keeping roughly the same size. */
+/** Change a shape's type, keeping roughly the same size. */
 function convertShape(s: Shape, t: Shape['type']): Shape {
   if (s.type === t) return s;
-  const half = s.type === 'box' || s.type === 'wedge' ? { x: s.size[0] / 2, y: s.size[1] / 2, z: s.size[2] / 2 }
-    : s.type === 'sphere' ? { x: s.radius, y: s.radius, z: s.radius }
-    : s.type === 'hull' ? { x: 0.15, y: 0.1, z: 0.15 }
-    : { x: s.radius, y: s.length / 2, z: s.radius };
+  const hh = shapeHalf(s);
+  const half = { x: Math.max(hh.x, 0.01), y: Math.max(hh.y, 0.005), z: Math.max(hh.z, 0.01) };
   const r = Math.round(Math.max(half.x, half.z) * 1000) / 1000, l = Math.round(half.y * 2000) / 1000;
   const size: Vec3 = [half.x * 2, half.y * 2, half.z * 2];
+  const [x, y, z] = [half.x, half.y, half.z];
   switch (t) {
     case 'box': return { type: 'box', size };
     case 'wedge': return { type: 'wedge', size, lip: 0.01 };
@@ -497,12 +613,30 @@ function convertShape(s: Shape, t: Shape['type']): Shape {
     case 'cone': return { type: 'cone', radius: r, length: l };
     case 'sphere': return { type: 'sphere', radius: r };
     case 'capsule': return { type: 'capsule', radius: Math.min(r, l / 2), length: l };
-    case 'hull': {
-      const [x, y, z] = [half.x, half.y, half.z];
-      return { type: 'hull', points: [[-x, -y, -z], [x, -y, -z], [-x, -y, z], [x, -y, z], [0, y, 0]] };
+    case 'hull': return { type: 'hull', points: [[-x, -y, -z], [x, -y, -z], [-x, -y, z], [x, -y, z], [0, y, 0]] };
+    case 'extrude': return { type: 'extrude', plane: 'top', depth: y * 2, outline: [[-x, -z], [x, -z], [x, z], [-x, z]] };
+    case 'lathe': return { type: 'lathe', segments: 24, profile: [[0, -y], [r, -y], [r, y], [0, y]] };
+    case 'mesh': {
+      // A placeholder box until a model is imported.
+      const v = [-x, -y, -z, x, -y, -z, x, y, -z, -x, y, -z, -x, -y, z, x, -y, z, x, y, z, -x, y, z];
+      const i = [0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2, 0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5];
+      return { type: 'mesh', vertices: v, indices: i };
     }
   }
 }
+
+const CATALOG_TABLES = { motors: MOTORS, batteries: BATTERIES, wheels: WHEELS, rams: RAMS, valves: VALVES, tanks: TANKS, materials: MATERIALS };
+
+/** Labels, units and display scale for custom-part numbers. */
+const SPEC_FIELDS: Record<string, [string, string, number]> = {
+  mass: ['Mass', 'kg', 1], cost: ['Cost', '£', 1], swapMinutes: ['Swap time', 'min', 1],
+  voltage: ['Voltage', 'V', 1], stallTorque: ['Stall torque', 'N·m', 1], freeSpeed: ['Free speed', 'rpm', 1], stallCurrent: ['Stall current', 'A', 1], freeCurrent: ['Free current', 'A', 1],
+  capacity: ['Capacity', 'Wh / g', 1], maxCurrent: ['Max current', 'A', 1],
+  radius: ['Radius', 'mm', 1000], width: ['Width', 'mm', 1000], grip: ['Grip', 'μ', 1],
+  bore: ['Bore', 'mm', 1], stroke: ['Stroke', 'mm', 1], maxPressure: ['Max pressure', 'bar', 1],
+  timeConstant: ['Response time', 's', 1], maxRate: ['Max speed', 'rad/s', 1],
+  density: ['Density', 'kg/m³', 1], yieldStrength: ['Yield strength', 'MPa', 1], toughness: ['Toughness', '× aluminium', 1], costPerKg: ['Cost', '£/kg', 1], friction: ['Friction', 'μ', 1],
+};
 
 function defaultActuator(kind: string, input?: InputDef): ActuatorDef | undefined {
   switch (kind) {

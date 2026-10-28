@@ -1,6 +1,7 @@
-import { material } from '../data/materials';
+import { MATERIALS, material } from '../data/materials';
 import { BATTERIES, MOTORS, RAMS, TANKS, VALVES, WHEELS, lookup } from '../data/parts';
 import type { ActuatorDef, PartDef, RobotDesign, Shape, Vec3 } from './design';
+import { shapeInertia, shapeSamplePoints, shapeArea, shapeVolume } from './shapes';
 import { qaxis, qmul, qrotate, vadd, vcross, vdot, vlen, vscale, vsub, type Q, type V3 } from './vmath';
 
 /**
@@ -106,82 +107,14 @@ export function resolveShape(p: PartDef): ResolvedShape {
     return { shape: { type: 'cylinder', radius: w.radius, length: w.width }, offset: { x: 0, y: 0, z: 0 }, rot: quatFromTo({ x: 0, y: 1, z: 0 }, axis) };
   }
   if (p.role === 'component') {
-    const side = Math.cbrt(partMass(p) / COMPONENT_DENSITY);
-    return { shape: { type: 'box', size: [side * 1.4, side * 0.7, side] }, offset: toV(p.shapeOffset ?? [0, 0, 0]), rot: { x: 0, y: 0, z: 0, w: 1 } };
+    // Ballast is lead; everything else is roughly battery-dense.
+    const side = Math.cbrt(partMass(p) / (p.component?.type === 'ballast' ? 11300 : COMPONENT_DENSITY));
+    return { shape: { type: 'box', size: [side * 1.4, side * 0.6, side * 1.2] }, offset: toV(p.shapeOffset ?? [0, 0, 0]), rot: { x: 0, y: 0, z: 0, w: 1 } };
   }
   return { shape: p.shape!, offset: toV(p.shapeOffset ?? [0, 0, 0]), rot: { x: 0, y: 0, z: 0, w: 1 } };
 }
 
-/** Corner points for polyhedral shapes (box, wedge, hull). */
-export function shapePoints(s: Shape): Vec3[] | null {
-  if (s.type === 'hull') return s.points;
-  if (s.type !== 'box' && s.type !== 'wedge') return null;
-  const [w, h, l] = s.size;
-  const x = w / 2, y = h / 2, z = l / 2;
-  if (s.type === 'box') {
-    const out: Vec3[] = [];
-    for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) out.push([sx * x, sy * y, sz * z]);
-    return out;
-  }
-  const lip = Math.min(s.lip, h);
-  const out: Vec3[] = [[-x, -y, -z], [x, -y, -z], [-x, y, -z], [x, y, -z], [-x, -y, z], [x, -y, z]];
-  if (lip > 0.001) out.push([-x, -y + lip, z], [x, -y + lip, z]);
-  return out;
-}
-
-/** Half-extents of the shape's bounding box, in its own frame. */
-export function shapeHalf(s: Shape): V3 {
-  switch (s.type) {
-    case 'box': case 'wedge': return { x: s.size[0] / 2, y: s.size[1] / 2, z: s.size[2] / 2 };
-    case 'cylinder': case 'cone': return { x: s.radius, y: s.length / 2, z: s.radius };
-    case 'sphere': return { x: s.radius, y: s.radius, z: s.radius };
-    case 'capsule': return { x: s.radius, y: s.length / 2 + s.radius, z: s.radius };
-    case 'hull': {
-      const m = [0, 0, 0];
-      for (const p of s.points) for (let i = 0; i < 3; i++) m[i] = Math.max(m[i], Math.abs(p[i]));
-      return toV(m);
-    }
-  }
-}
-
-export function shapeVolume(s: Shape): number {
-  switch (s.type) {
-    case 'box': return s.size[0] * s.size[1] * s.size[2];
-    case 'wedge': return s.size[0] * s.size[2] * (s.size[1] + Math.min(s.lip, s.size[1])) / 2;
-    case 'cylinder': return Math.PI * s.radius ** 2 * s.length;
-    case 'cone': return (Math.PI * s.radius ** 2 * s.length) / 3;
-    case 'sphere': return (4 / 3) * Math.PI * s.radius ** 3;
-    case 'capsule': return Math.PI * s.radius ** 2 * s.length + (4 / 3) * Math.PI * s.radius ** 3;
-    case 'hull': { const hh = shapeHalf(s); return 8 * hh.x * hh.y * hh.z * 0.6; }
-  }
-}
-
-export function shapeArea(s: Shape): number {
-  switch (s.type) {
-    case 'box': { const [w, h, l] = s.size; return 2 * (w * h + w * l + h * l); }
-    case 'wedge': {
-      const [w, h, l] = s.size, lip = Math.min(s.lip, h);
-      return w * l + w * h + w * Math.hypot(l, h - lip) + l * (h + lip) + w * lip;
-    }
-    case 'cylinder': return 2 * Math.PI * s.radius * (s.radius + s.length);
-    case 'cone': return Math.PI * s.radius * (s.radius + Math.hypot(s.radius, s.length));
-    case 'sphere': return 4 * Math.PI * s.radius ** 2;
-    case 'capsule': return 2 * Math.PI * s.radius * s.length + 4 * Math.PI * s.radius ** 2;
-    case 'hull': { const hh = shapeHalf(s); return 8 * (hh.x * hh.y + hh.x * hh.z + hh.y * hh.z) * 0.8; }
-  }
-}
-
-/** Largest face area, m² (how widely a hit spreads). */
-export function faceArea(s: Shape): number {
-  const h = shapeHalf(s);
-  return 4 * Math.max(h.x * h.y, h.x * h.z, h.y * h.z);
-}
-
-/** Smallest dimension, mm (how thick a solid part is). */
-export function solidThickness(s: Shape): number {
-  const h = shapeHalf(s);
-  return Math.min(60, 2000 * Math.min(h.x, h.y, h.z));
-}
+export { faceArea, shapeArea, shapeHalf, shapeInertia, shapeVolume, solidThickness } from './shapes';
 
 // ---------------------------------------------------------------- mass & cost
 
@@ -191,6 +124,7 @@ export function partMass(p: PartDef): number {
     const c = p.component!;
     if (c.type === 'battery') return lookup(BATTERIES, c.part, 'battery').mass;
     if (c.type === 'gasTank') { const t = lookup(TANKS, c.part, 'tank'); return t.mass + t.capacity / 1000; }
+    if (c.type === 'flamethrower') return 2.5 + c.fuel;
     return c.mass;
   }
   const m = material(p.material ?? 'aluminium');
@@ -207,30 +141,6 @@ export function actuatorMass(a: ActuatorDef): number {
 }
 
 // ---------------------------------------------------------------- inertia
-
-/** Solid-body principal moments about the shape centre, in its frame. Hollow parts carry mass further out. */
-export function shapeInertia(s: Shape, mass: number, hollow: boolean): V3 {
-  const k = hollow ? 1.6 : 1;
-  let I: V3;
-  switch (s.type) {
-    case 'cylinder': case 'capsule': {
-      const r = s.radius, h = s.type === 'capsule' ? s.length + 1.3 * r : s.length;
-      I = { x: (mass * (3 * r * r + h * h)) / 12, y: 0.5 * mass * r * r, z: (mass * (3 * r * r + h * h)) / 12 };
-      break;
-    }
-    case 'cone': {
-      const r = s.radius, h = s.length;
-      I = { x: mass * (0.15 * r * r + 0.0375 * h * h), y: 0.3 * mass * r * r, z: mass * (0.15 * r * r + 0.0375 * h * h) };
-      break;
-    }
-    case 'sphere': I = { x: 0.4 * mass * s.radius ** 2, y: 0.4 * mass * s.radius ** 2, z: 0.4 * mass * s.radius ** 2 }; break;
-    default: {
-      const h = shapeHalf(s), x = 2 * h.x, y = 2 * h.y, z = 2 * h.z;
-      I = { x: (mass * (y * y + z * z)) / 12, y: (mass * (x * x + z * z)) / 12, z: (mass * (x * x + y * y)) / 12 };
-    }
-  }
-  return vscale(I, k);
-}
 
 /**
  * Moment of inertia of a rigid group of parts about an axis line (through
@@ -287,29 +197,28 @@ export function designBounds(d: RobotDesign): { min: V3; max: V3 } {
   return { min, max };
 }
 
-/** Points on a part's surface (or its bounding box for round shapes), robot frame. */
+/** Points on a part's surface (corners, or sampled rims for round shapes), robot frame. */
 export function shapeCorners(p: PartDef, f: Frame): V3[] {
   const rs = resolveShape(p);
   const rot = qmul(f.rot, rs.rot);
   const centre = vadd(f.pos, qrotate(f.rot, rs.offset));
-  const pts = shapePoints(rs.shape);
-  let local: V3[];
-  if (pts) local = pts.map(toV);
-  else if (rs.shape.type === 'sphere') {
-    const r = rs.shape.radius;
-    local = [];
-    for (const a of [-1, 0, 1]) for (const b of [-1, 0, 1]) for (const c of [-1, 0, 1]) {
-      const v = { x: a, y: b, z: c }, l = vlen(v);
-      if (l > 0) local.push(vscale(v, r / l));
-    }
-  } else {
-    // Round shapes: sample the rims.
-    const h = shapeHalf(rs.shape);
-    local = [];
-    for (let i = 0; i < 16; i++) {
-      const t = (i / 16) * 2 * Math.PI;
-      for (const y of [-h.y, h.y]) local.push({ x: Math.cos(t) * h.x, y, z: Math.sin(t) * h.z });
-    }
-  }
-  return local.map((v) => vadd(centre, qrotate(rot, v)));
+  return shapeSamplePoints(rs.shape).map((v) => vadd(centre, qrotate(rot, toV(v))));
+}
+
+/** The actuator on a part's joint, if it has one. */
+export function actuatorOf(p: PartDef): ActuatorDef | undefined {
+  return p.joint.type === 'hinge' || p.joint.type === 'slider' ? p.joint.actuator : undefined;
+}
+
+/** Make a design's own catalogue parts and materials available by id. */
+export function registerCatalog(d: RobotDesign) {
+  const c = d.catalog;
+  if (!c) return;
+  Object.assign(MOTORS, c.motors ?? {});
+  Object.assign(BATTERIES, c.batteries ?? {});
+  Object.assign(WHEELS, c.wheels ?? {});
+  Object.assign(RAMS, c.rams ?? {});
+  Object.assign(VALVES, c.valves ?? {});
+  Object.assign(TANKS, c.tanks ?? {});
+  Object.assign(MATERIALS, c.materials ?? {});
 }
