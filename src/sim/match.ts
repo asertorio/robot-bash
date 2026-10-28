@@ -1,0 +1,372 @@
+import RAPIER from '@dimforge/rapier3d-compat';
+import { Arena } from './arena';
+import { NEUTRAL, type ControlState } from './control';
+import type { RobotDesign } from './design';
+import { Robot, type Part } from './robot';
+import { vadd, vcross, vdot, vlen, vscale, vsub, type V3 } from './vmath';
+
+export const STEP = 1 / 480;
+const MAX_STEPS_PER_FRAME = 40;
+const COUNTDOWN = 3;
+/** Seconds without moving under its own power before the referee starts counting. */
+const COUNT_GRACE = 4;
+const COUNT_OUT = 10;
+
+export type Phase = 'countdown' | 'fight' | 'over';
+
+export interface CommentaryLine {
+  time: number;
+  text: string;
+  level: 'info' | 'major';
+}
+
+export interface JudgeScore {
+  aggression: number;
+  control: number;
+  damage: number;
+  style: number;
+  total: number;
+}
+
+export interface MatchResult {
+  winner: number | null;
+  reason: string;
+  scores?: JudgeScore[];
+}
+
+interface Tally {
+  aggression: number;
+  control: number;
+  damage: number;
+  style: number;
+}
+
+/** One impact between two colliders, which may last several physics steps. */
+interface Episode {
+  energy: number;
+  start: number;
+  last: number;
+}
+/** Contact gaps shorter than this (s) are the same impact. */
+const EPISODE_GAP = 0.02;
+/** A long grind is treated as a fresh impact this often (s). */
+const EPISODE_MAX = 0.25;
+
+interface BodySnapshot {
+  lin: V3;
+  ang: V3;
+  com: V3;
+}
+
+export interface MatchOptions {
+  duration?: number;
+  /** Skip the 3-2-1 (tests, test bay). */
+  skipCountdown?: boolean;
+  /** Override start positions (robot origin on the floor) and headings. */
+  spawns?: Array<{ pos: V3; yaw: number }>;
+}
+
+export class Match {
+  readonly world: RAPIER.World;
+  readonly arena: Arena;
+  readonly robots: Robot[];
+  readonly duration: number;
+  phase: Phase;
+  /** Seconds since activation (negative during the countdown). */
+  time: number;
+  commentary: CommentaryLine[] = [];
+  /** Hard hits since the renderer last looked (for sparks). */
+  impacts: Array<{ point: V3; energy: number }> = [];
+  result: MatchResult | null = null;
+  /** Current referee count per robot (seconds), or null when not counting. */
+  counts: Array<number | null>;
+  eliminated: Array<string | null>;
+
+  private events = new RAPIER.EventQueue(true);
+  private acc = 0;
+  private controls: ControlState[];
+  private lastSelfMove: number[];
+  private tally: Tally[];
+  private robotColliders: Set<number>[] = [];
+  private stepCount = 0;
+  private episodes = new Map<string, Episode>();
+
+  constructor(designs: RobotDesign[], opts: MatchOptions = {}) {
+    this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    this.world.timestep = STEP;
+    this.world.numSolverIterations = 8;
+    this.arena = new Arena(this.world);
+    const spawns = opts.spawns ?? [
+      { pos: { x: 0, y: 0.01, z: -3.5 }, yaw: 0 },
+      { pos: { x: 0, y: 0.01, z: 3.5 }, yaw: Math.PI },
+      { pos: { x: -3.5, y: 0.01, z: 0 }, yaw: Math.PI / 2 },
+      { pos: { x: 3.5, y: 0.01, z: 0 }, yaw: -Math.PI / 2 },
+    ];
+    this.robots = designs.map((d, i) => new Robot(this.world, d, i, spawns[i].pos, spawns[i].yaw));
+    this.duration = opts.duration ?? 180;
+    this.phase = opts.skipCountdown ? 'fight' : 'countdown';
+    this.time = opts.skipCountdown ? 0 : -COUNTDOWN;
+    this.controls = this.robots.map(() => NEUTRAL);
+    this.counts = this.robots.map(() => null);
+    this.eliminated = this.robots.map(() => null);
+    this.lastSelfMove = this.robots.map(() => 0);
+    this.tally = this.robots.map(() => ({ aggression: 0, control: 0, damage: 0, style: 0 }));
+  }
+
+  /** Advance by a frame's worth of real time, in fixed physics steps. */
+  update(frameDt: number, controls: ControlState[]) {
+    this.controls = controls;
+    this.acc += Math.min(frameDt, MAX_STEPS_PER_FRAME * STEP);
+    while (this.acc >= STEP) {
+      this.step();
+      this.acc -= STEP;
+    }
+  }
+
+  /** One fixed physics step. */
+  step() {
+    const prevPhase = this.phase;
+    this.time += STEP;
+    this.stepCount++;
+    if (this.phase === 'countdown' && this.time >= 0) {
+      this.phase = 'fight';
+      this.say('Activate!', 'major');
+    }
+
+    this.robots.forEach((r, i) => {
+      const live = this.phase !== 'countdown' && !this.eliminated[i];
+      r.setControl(live ? this.controls[i] ?? NEUTRAL : NEUTRAL);
+      r.update(STEP);
+    });
+    this.arena.update(STEP);
+
+    const snapshot = this.snapshot();
+    this.world.step(this.events);
+    this.processContacts(snapshot);
+
+    for (const r of this.robots) {
+      r.resolveDamage();
+      for (const e of r.events) this.say(phrase(r.design.name, e.text), e.level);
+      r.events = [];
+    }
+
+    if (this.stepCount % 480 === 0) {
+      for (const [k, ep] of this.episodes) if (this.time - ep.last > 1) this.episodes.delete(k);
+    }
+
+    // Rules run at 60 Hz; no need for more.
+    if (this.stepCount % 8 === 0 && prevPhase !== 'countdown') this.referee(8 * STEP);
+  }
+
+  private snapshot(): Map<number, BodySnapshot> {
+    const snap = new Map<number, BodySnapshot>();
+    this.world.forEachRigidBody((b) => {
+      if (!b.isDynamic()) return;
+      snap.set(b.handle, { lin: b.linvel(), ang: b.angvel(), com: b.worldCom() });
+    });
+    return snap;
+  }
+
+  /**
+   * Turn this step's contact forces into damage. Energy dissipated by an
+   * impact ≈ ½ × impulse × closing speed at the contact point (pre-impact).
+   */
+  private processContacts(snap: Map<number, BodySnapshot>) {
+    this.events.drainContactForceEvents((e) => {
+      const c1 = this.world.getCollider(e.collider1());
+      const c2 = this.world.getCollider(e.collider2());
+      if (!c1 || !c2) return;
+      const owner1 = this.owner(c1), owner2 = this.owner(c2);
+      if (!owner1 && !owner2) return;
+      const impulse = e.totalForceMagnitude() * STEP;
+
+      let point: V3 | null = null;
+      let normal: V3 | null = null;
+      this.world.contactPair(c1, c2, (m, flipped) => {
+        const n = m.numSolverContacts();
+        if (!n) return;
+        let p = { x: 0, y: 0, z: 0 };
+        for (let i = 0; i < n; i++) p = vadd(p, m.solverContactPoint(i)!);
+        point = vscale(p, 1 / n);
+        const mn = m.normal();
+        normal = flipped ? vscale(mn, -1) : mn;
+      });
+      if (!point || !normal) return;
+      const v1 = this.preVelocity(c1, point, snap);
+      const v2 = this.preVelocity(c2, point, snap);
+      const closing = Math.abs(vdot(vsub(v1, v2), normal));
+      const energy = 0.5 * impulse * closing;
+      if (energy < 1) return;
+      if (energy > 150 && this.impacts.length < 64) this.impacts.push({ point, energy });
+
+      // Accumulate the whole impact, so a hit spread over several steps
+      // counts as one hit against each part's yield threshold.
+      const key = c1.handle < c2.handle ? `${c1.handle}:${c2.handle}` : `${c2.handle}:${c1.handle}`;
+      let ep = this.episodes.get(key);
+      if (!ep || this.time - ep.last > EPISODE_GAP || this.time - ep.start > EPISODE_MAX) {
+        ep = { energy: 0, start: this.time, last: this.time };
+        this.episodes.set(key, ep);
+      }
+      const prior = ep.energy / 2;
+      ep.energy += energy;
+      ep.last = this.time;
+
+      // Each side of the contact soaks up half.
+      const half = energy / 2;
+      const loss1 = owner1 ? owner1.robot.absorb(owner1.part, half, point, prior) : 0;
+      const loss2 = owner2 ? owner2.robot.absorb(owner2.part, half, point, prior) : 0;
+      if (this.phase !== 'fight') return;
+      if (owner1 && owner2 && owner1.robot !== owner2.robot) {
+        this.tally[owner2.robot.index].damage += loss1;
+        this.tally[owner1.robot.index].damage += loss2;
+        if (ep.energy > 2500 && ep.energy - energy <= 2500) {
+          // A big hit is good television.
+          const attacker = loss2 > loss1 ? owner1.robot : owner2.robot;
+          this.tally[attacker.index].style += 1;
+        }
+      }
+    });
+  }
+
+  private owner(c: RAPIER.Collider): { robot: Robot; part: Part } | null {
+    for (const r of this.robots) {
+      const part = r.partFor(c);
+      if (part) return { robot: r, part };
+    }
+    return null;
+  }
+
+  private preVelocity(c: RAPIER.Collider, p: V3, snap: Map<number, BodySnapshot>): V3 {
+    const b = c.parent();
+    if (!b) return { x: 0, y: 0, z: 0 };
+    const s = snap.get(b.handle);
+    if (!s) return b.isKinematic() ? b.linvel() : { x: 0, y: 0, z: 0 };
+    return vadd(s.lin, vcross(s.ang, vsub(p, s.com)));
+  }
+
+  // ---------------------------------------------------------------- rules
+
+  private referee(dt: number) {
+    const alive = () => this.robots.filter((_, i) => !this.eliminated[i]);
+    this.robots.forEach((r, i) => {
+      if (this.eliminated[i]) return;
+      this.robotColliders[i] ??= new Set();
+      const handles = this.robotColliders[i];
+      handles.clear();
+      for (const p of r.parts) if (p.collider && !p.detached) handles.add(p.collider.handle);
+
+      if (!this.arena.pitOpen && this.arena.buttonPressedBy(handles)) {
+        this.arena.pitOpen = true;
+        this.say(`${r.design.name} has hit the pit release — the pit is open!`, 'major');
+      }
+      const pos = r.position;
+      if (this.arena.isInPit(pos)) return this.eliminate(i, 'into the pit');
+      if (this.arena.isOutOfArena(pos)) return this.eliminate(i, 'out of the arena');
+      if (this.phase !== 'fight') return;
+
+      // Moving under its own power resets the count; being shoved around
+      // doesn't. Turning on the spot or shoving an opponent counts as control.
+      const c = this.controls[i] ?? NEUTRAL;
+      const v = r.chassis.linvel();
+      const speed = Math.hypot(v.x, v.z);
+      const trying = Math.abs(c.left) + Math.abs(c.right) > 0.2;
+      const active = speed > 0.25 || Math.abs(r.chassis.angvel().y) > 0.8 || this.touchingOpponent(i);
+      const selfMoving = trying && active && r.tractionWheels() > 0;
+      if (selfMoving) this.lastSelfMove[i] = this.time;
+      const still = this.time - this.lastSelfMove[i] - COUNT_GRACE;
+      const was = this.counts[i];
+      this.counts[i] = still > 0 ? still : null;
+      if (was === null && this.counts[i] !== null) this.say(`The referee is counting out ${r.design.name}…`, 'info');
+      if (still >= COUNT_OUT) return this.eliminate(i, 'immobilised');
+
+      // Judges' notes.
+      const t = this.tally[i];
+      if (selfMoving) t.control += dt;
+      const opp = this.robots.find((_, j) => j !== i && !this.eliminated[j]);
+      if (opp) {
+        const to = vsub(opp.position, pos);
+        const d = vlen(to);
+        if (d < 4 && selfMoving && vdot(v, vscale(to, 1 / d)) > 0.5) t.aggression += dt;
+        // Opponent off the ground near us: we probably put it there.
+        if (d < 2 && opp.position.y > 0.35) t.style += dt * 2;
+      }
+    });
+
+    if (this.phase === 'fight') {
+      const left = alive();
+      if (left.length <= 1 && this.robots.length > 1) {
+        const winner = left[0];
+        const loser = this.robots.find((_, i) => this.eliminated[i]);
+        const reason = loser ? `${loser.design.name} went ${this.eliminated[loser.index]}` : '';
+        this.finish({ winner: winner ? winner.index : null, reason });
+      } else if (this.time >= this.duration) {
+        this.judge();
+      }
+    }
+  }
+
+  private touchingOpponent(i: number): boolean {
+    const mine = this.robotColliders[i];
+    let touching = false;
+    for (const p of this.robots[i].parts) {
+      if (touching) break;
+      if (!p.collider || p.detached) continue;
+      this.world.contactPairsWith(p.collider, (other) => {
+        if (touching || mine.has(other.handle)) return;
+        if (!this.robots.some((r, j) => j !== i && r.partFor(other))) return;
+        this.world.contactPair(p.collider!, other, (m) => { if (m.numContacts() > 0) touching = true; });
+      });
+    }
+    return touching;
+  }
+
+  private eliminate(i: number, how: string) {
+    if (this.eliminated[i]) return;
+    this.eliminated[i] = how;
+    this.counts[i] = null;
+    const name = this.robots[i].design.name;
+    const line = how === 'immobilised' ? `${name} is immobilised! …8, 9, 10 — out!` : `${name} is ${how}!`;
+    this.say(line, 'major');
+  }
+
+  private judge() {
+    const keys: (keyof Tally)[] = ['aggression', 'control', 'damage', 'style'];
+    const scores: JudgeScore[] = this.robots.map(() => ({ aggression: 0, control: 0, damage: 0, style: 0, total: 0 }));
+    for (const k of keys) {
+      const sum = this.tally.reduce((s, t) => s + t[k], 0);
+      this.tally.forEach((t, i) => {
+        // 25 points per category, shared in proportion to what each robot did.
+        const pts = sum > 0 ? (25 * t[k]) / sum : 25 / this.robots.length;
+        scores[i][k] = Math.round(pts * 10) / 10;
+        scores[i].total += pts;
+      });
+    }
+    scores.forEach((s) => (s.total = Math.round(s.total * 10) / 10));
+    let winner = 0;
+    scores.forEach((s, i) => { if (s.total > scores[winner].total) winner = i; });
+    this.finish({ winner, reason: "Judges' decision", scores });
+  }
+
+  private finish(result: MatchResult) {
+    this.phase = 'over';
+    this.result = result;
+    const w = result.winner !== null ? this.robots[result.winner].design.name : 'Nobody';
+    this.say(`${w} wins! ${result.reason}`, 'major');
+  }
+
+  private say(text: string, level: CommentaryLine['level']) {
+    this.commentary.push({ time: Math.max(0, this.time), text, level });
+  }
+
+  free() {
+    this.world.free();
+    this.events.free();
+  }
+}
+
+/** Join a robot name and an event fragment into a sentence. */
+function phrase(name: string, text: string): string {
+  if (text.startsWith("'s")) return `${name}${text}`;
+  if (text.startsWith('— ')) return `${name}: ${text.slice(2)}`;
+  return `${name} ${text}`;
+}
