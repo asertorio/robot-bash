@@ -202,7 +202,14 @@ of a full rebuild, and pit time per part.
    test dummy and telemetry; save, load, and JSON import/export. *Next for the
    builder:* drag-and-drop placement in 3D, more weapon types (lifter, axe,
    crusher, drum), and per-part cost/availability that feeds into repairs.
-4. **The show:** CPZs, house robots with AI, floor flipper, spikes, flame pit.
+4. **The show (done in v0.3):** four original house robots, each confined to
+   a CPZ (corner patrol zone) unless a competitor is being counted out; a kinematic floor flipper
+   triggered by a robot parking on it; a cycling flame pit whose heat damages
+   parts by type and material (`HEAT` in `damage.ts`); flow-limited lifter
+   valves. House robots never count towards the result or the judges.
+   *Later:* wall spikes/grinders, house-robot weapons beyond lifters and
+   spinners (crusher, flame thrower), and the pit being usable by house robots
+   to finish victims.
 5. **Tournament:** heats → final, side events (sumo, pinball, football,
    gauntlet, trials), pit repairs limited by time, budget and spares.
 6. **Campaign:** progression and unlocks; restricted weapons (fire, etc.) in

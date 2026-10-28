@@ -1,6 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { ARENA_GROUPS } from './groups';
-import type { V3 } from './vmath';
+import { qaxis, type V3 } from './vmath';
 
 /** Arena layout. Shared by the simulation and the renderer. */
 export const ARENA = {
@@ -10,17 +10,51 @@ export const ARENA = {
   wallThickness: 0.15,
   /** Floor beyond the walls (robots thrown out land here), half-width. */
   outerHalf: 9,
-  /** Side length of the corner patrol zones (marked now, house robots later). */
+  /** Side length of the corner patrol zones, where the house robots live. */
   cpz: 2.2,
   pit: { x: 3.2, z: -3.2, half: 0.8, depth: 1.2 },
   pitButton: { x: -4.3, z: 4.3, half: 0.35 },
+  /** Hinged floor panel that throws whatever sits on it. Hinge runs along x at z0. */
+  floorFlipper: { x: -3.4, z0: -1.1, halfWidth: 0.6, length: 1.0, maxAngle: 1.0, riseTime: 0.18 },
+  /** Grille that belches fire on a cycle. */
+  flamePit: { x: 2.6, z: 2.4, half: 0.6, period: 7, burn: 2.2 },
   floorFriction: 1.0,
 };
+
+export interface Rect { x0: number; x1: number; z0: number; z1: number }
+
+const pitRect = (): Rect => ({ x0: ARENA.pit.x - ARENA.pit.half, x1: ARENA.pit.x + ARENA.pit.half, z0: ARENA.pit.z - ARENA.pit.half, z1: ARENA.pit.z + ARENA.pit.half });
+export const floorFlipperRect = (): Rect => {
+  const f = ARENA.floorFlipper;
+  return { x0: f.x - f.halfWidth, x1: f.x + f.halfWidth, z0: f.z0, z1: f.z0 + f.length };
+};
+export const flamePitRect = (): Rect => {
+  const f = ARENA.flamePit;
+  return { x0: f.x - f.half, x1: f.x + f.half, z0: f.z - f.half, z1: f.z + f.half };
+};
+export const inRect = (r: Rect, p: V3, margin = 0) => p.x > r.x0 - margin && p.x < r.x1 + margin && p.z > r.z0 - margin && p.z < r.z1 + margin;
+
+/** Split a square floor into rectangles that leave the given holes open. */
+export function floorAround(half: number, holes: Rect[]): Rect[] {
+  const xs = [...new Set([-half, half, ...holes.flatMap((h) => [h.x0, h.x1])])].sort((a, b) => a - b);
+  const out: Rect[] = [];
+  for (let i = 0; i < xs.length - 1; i++) {
+    const x0 = xs[i], x1 = xs[i + 1];
+    const cuts = holes.filter((h) => h.x0 <= x0 && h.x1 >= x1).sort((a, b) => a.z0 - b.z0);
+    let z = -half;
+    for (const c of cuts) {
+      if (c.z0 > z) out.push({ x0, x1, z0: z, z1: c.z0 });
+      z = Math.max(z, c.z1);
+    }
+    if (z < half) out.push({ x0, x1, z0: z, z1: half });
+  }
+  return out;
+}
 
 export interface Box {
   centre: V3;
   half: V3;
-  kind: 'floor' | 'outerFloor' | 'wall' | 'pitWall' | 'pitFloor' | 'barrier';
+  kind: 'floor' | 'outerFloor' | 'wall' | 'pitWall' | 'pitFloor' | 'barrier' | 'well';
 }
 
 /** Static boxes making up the arena (floor around the pit hole, walls, pit, outer barrier). */
@@ -31,12 +65,11 @@ export function arenaBoxes(): Box[] {
   const slab = (x0: number, x1: number, z0: number, z1: number, kind: Box['kind'], top = 0) => {
     out.push({ centre: { x: (x0 + x1) / 2, y: top - ft, z: (z0 + z1) / 2 }, half: { x: (x1 - x0) / 2, y: ft, z: (z1 - z0) / 2 }, kind });
   };
-  // Fighting floor, with a square hole for the pit.
-  const px0 = pit.x - pit.half, px1 = pit.x + pit.half, pz0 = pit.z - pit.half, pz1 = pit.z + pit.half;
-  slab(-H, px0, -H, H, 'floor');
-  slab(px1, H, -H, H, 'floor');
-  slab(px0, px1, -H, pz0, 'floor');
-  slab(px0, px1, pz1, H, 'floor');
+  // Fighting floor, with holes for the pit and the floor flipper.
+  const ff = floorFlipperRect();
+  for (const r of floorAround(H, [pitRect(), ff])) slab(r.x0, r.x1, r.z0, r.z1, 'floor');
+  // Shallow well under the floor flipper.
+  slab(ff.x0, ff.x1, ff.z0, ff.z1, 'well', -0.3);
   // Outside the walls.
   slab(-O, O, H + T, O, 'outerFloor', -0.02);
   slab(-O, O, -O, -H - T, 'outerFloor', -0.02);
@@ -68,9 +101,15 @@ export class Arena {
   readonly trapdoor: RAPIER.RigidBody;
   readonly pitButton: RAPIER.Collider;
   readonly staticColliders = new Set<number>();
+  readonly floorFlipper: RAPIER.RigidBody;
   pitOpen = false;
   /** 0 = closed (flush with floor), 1 = fully lowered. */
   pitOpenAmount = 0;
+  /** Floor flipper angle, radians (0 = flush). */
+  flipperAngle = 0;
+  private flipperState: 'ready' | 'rising' | 'holding' | 'lowering' | 'cooldown' = 'ready';
+  private flipperTimer = 0;
+  private time = 0;
 
   private world: RAPIER.World;
 
@@ -100,6 +139,18 @@ export class Arena {
       this.trapdoor,
     );
     this.staticColliders.add(td.handle);
+    // Floor flipper: a kinematic steel panel, so nothing can stop it.
+    const ffd = ARENA.floorFlipper;
+    this.floorFlipper = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(ffd.x, 0, ffd.z0));
+    const fc = world.createCollider(
+      RAPIER.ColliderDesc.cuboid(ffd.halfWidth - 0.01, 0.05, ffd.length / 2 - 0.01)
+        .setTranslation(0, -0.05, ffd.length / 2)
+        .setFriction(ARENA.floorFriction)
+        .setFrictionCombineRule(RAPIER.CoefficientCombineRule.Multiply)
+        .setCollisionGroups(ARENA_GROUPS),
+      this.floorFlipper,
+    );
+    this.staticColliders.add(fc.handle);
     this.pitButton = world.createCollider(
       RAPIER.ColliderDesc.cuboid(pitButton.half, 0.03, pitButton.half)
         .setTranslation(pitButton.x, 0.03, pitButton.z)
@@ -117,11 +168,57 @@ export class Arena {
     return hit;
   }
 
+  /** True while the flame pit is burning. */
+  get flamesOn(): boolean {
+    const f = ARENA.flamePit;
+    return this.time % f.period > f.period - f.burn;
+  }
+
+  get floorFlipperReady(): boolean {
+    return this.flipperState === 'ready';
+  }
+
+  /** Fire the floor flipper (if it's ready). */
+  fireFloorFlipper(): boolean {
+    if (this.flipperState !== 'ready') return false;
+    this.flipperState = 'rising';
+    this.flipperTimer = 0;
+    return true;
+  }
+
   update(dt: number) {
-    if (!this.pitOpen || this.pitOpenAmount >= 1) return;
-    this.pitOpenAmount = Math.min(1, this.pitOpenAmount + dt / 1.5);
-    const { pit } = ARENA;
-    this.trapdoor.setNextKinematicTranslation({ x: pit.x, y: -0.1 - this.pitOpenAmount * (pit.depth - 0.3), z: pit.z });
+    this.time += dt;
+    if (this.pitOpen && this.pitOpenAmount < 1) {
+      this.pitOpenAmount = Math.min(1, this.pitOpenAmount + dt / 1.5);
+      const { pit } = ARENA;
+      this.trapdoor.setNextKinematicTranslation({ x: pit.x, y: -0.1 - this.pitOpenAmount * (pit.depth - 0.3), z: pit.z });
+    }
+    this.updateFloorFlipper(dt);
+  }
+
+  private updateFloorFlipper(dt: number) {
+    const f = ARENA.floorFlipper;
+    this.flipperTimer += dt;
+    const t = this.flipperTimer;
+    switch (this.flipperState) {
+      case 'ready': return;
+      case 'rising':
+        this.flipperAngle = f.maxAngle * Math.min(1, t / f.riseTime);
+        if (t >= f.riseTime) { this.flipperState = 'holding'; this.flipperTimer = 0; }
+        break;
+      case 'holding':
+        if (t >= 0.6) { this.flipperState = 'lowering'; this.flipperTimer = 0; }
+        break;
+      case 'lowering':
+        this.flipperAngle = f.maxAngle * Math.max(0, 1 - t / 1.2);
+        if (t >= 1.2) { this.flipperState = 'cooldown'; this.flipperTimer = 0; }
+        break;
+      case 'cooldown':
+        if (t >= 4) this.flipperState = 'ready';
+        return;
+    }
+    // Rotating about −X lifts the free (+z) edge.
+    this.floorFlipper.setNextKinematicRotation(qaxis({ x: -1, y: 0, z: 0 }, this.flipperAngle));
   }
 
   isInPit(p: V3): boolean {

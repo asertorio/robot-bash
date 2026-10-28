@@ -1,7 +1,25 @@
 import { ARENA } from './arena';
 import type { ControlState } from './control';
 import type { Robot } from './robot';
-import { qconj, qrotate, vsub } from './vmath';
+import { qconj, qrotate, vsub, type V3 } from './vmath';
+
+/**
+ * Point-and-drive steering towards a world position, handling being upside
+ * down (the drive reverses and the sides swap). Returns per-side throttles.
+ */
+export function steerTo(me: Robot, target: V3, maxThrottle = 1): { left: number; right: number; bearing: number; distance: number } {
+  const inverted = me.uprightness < 0;
+  const rel = qrotate(qconj(me.rotation), vsub(target, me.position));
+  if (inverted) rel.x = -rel.x;
+  const distance = Math.hypot(rel.x, rel.z);
+  const bearing = Math.atan2(rel.x, rel.z); // + = target to my left
+  const turn = Math.max(-1, Math.min(1, -bearing * 1.6));
+  const throttle = Math.max(0, Math.cos(bearing)) * maxThrottle * (distance > 0.6 ? 1 : 0.6);
+  let left = Math.max(-1, Math.min(1, throttle + turn));
+  let right = Math.max(-1, Math.min(1, throttle - turn));
+  if (inverted) [left, right] = [-right, -left];
+  return { left, right, bearing, distance };
+}
 
 /**
  * A simple CPU driver: chase, line up, use the weapon, don't drive into the

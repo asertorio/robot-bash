@@ -68,6 +68,21 @@ export function transmission(materialId: string, thicknessMm: number, condition:
   return DAMAGE.TRANSMIT * (absorb + (1 - absorb) * (1 - Math.max(0, condition)));
 }
 
+/**
+ * Flame pit: condition lost per second of direct flame. Tyres and plastics
+ * suffer most; steel barely notices. Internals behind armour get a fraction.
+ */
+export const HEAT = {
+  wheel: 0.12,
+  electronics: 0.05,
+  battery: 0.04,
+  driveMotor: 0.015,
+  weaponMotor: 0.015,
+  gas: 0.03,
+  shielded: 0.3,
+  plate: { aluminium: 0.012, mildSteel: 0.003, hardox: 0.003, titanium: 0.002, hdpe: 0.09, polycarbonate: 0.08 } as Record<string, number>,
+};
+
 export type ConditionLabel = 'OK' | 'Scuffed' | 'Damaged' | 'Failing' | 'Destroyed';
 
 export function conditionLabel(c: number): ConditionLabel {

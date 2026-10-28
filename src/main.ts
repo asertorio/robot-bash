@@ -1,5 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { loadDesigns } from './data/garage';
+import { HOUSE_ROBOTS } from './data/house';
 import { CRASH_TEST_DUMMY, TEMPLATES } from './data/templates';
 import { loadProfiles, saveProfiles, type ControlProfile } from './input/bindings';
 import { InputManager } from './input/input';
@@ -29,6 +30,7 @@ class App {
   private roster: RobotDesign[] = TEMPLATES;
   private garage: Garage | null = null;
   private controllers: Controller[] = ['Human', 'CPU'];
+  private houseCount = 2;
   private paused = false;
   private resultShown = false;
   private screenKeys: ((code: string) => void) | null = null;
@@ -42,18 +44,18 @@ class App {
 
   /** Two CPU robots scrapping behind the menus. */
   private attract() {
-    this.beginMatch([TEMPLATES[0], TEMPLATES[2]], ['CPU', 'CPU'], true);
+    this.beginMatch([TEMPLATES[0], TEMPLATES[2]], ['CPU', 'CPU'], true, 2);
   }
 
   private fight() {
-    this.beginMatch(this.picks.map((i) => this.roster[i]), this.controllers);
+    this.beginMatch(this.picks.map((i) => this.roster[i]), this.controllers, false, this.houseCount);
   }
 
-  private beginMatch(designs: RobotDesign[], controllers: Controller[], background = false) {
+  private beginMatch(designs: RobotDesign[], controllers: Controller[], background = false, houseCount = 0) {
     this.match?.free();
     this.garage = null;
     this.view.cameraMode = 'tv';
-    this.match = new Match(designs, { duration: background ? 1e9 : 180 });
+    this.match = new Match(designs, { duration: background ? 1e9 : 180, house: HOUSE_ROBOTS.slice(0, houseCount) });
     this.cpus = controllers.map((c) => (c === 'CPU' ? new CpuDriver() : null));
     this.view.setMatch(this.match);
     this.paused = false;
@@ -75,9 +77,9 @@ class App {
       this.garage.update(dt);
     } else if (m && !this.paused) {
       const live = this.hud ? controls : [];
-      const inputs = m.robots.map((r, i) => {
+      const inputs = m.competitors.map((r, i) => {
         const cpu = this.cpus[i];
-        if (cpu) return cpu.update(r, m.robots.find((_, j) => j !== i && !m.eliminated[j]), m.arena.pitOpen, dt);
+        if (cpu) return cpu.update(r, m.competitors.find((_, j) => j !== i && !m.eliminated[j]), m.arena.pitOpen, dt);
         return live[i] ?? { left: 0, right: 0, weapon: false, weapon2: false };
       });
       m.update(dt, inputs);
@@ -160,6 +162,9 @@ class App {
       mount(this.ui, h('div', { class: 'screen top' },
         h('h2', {}, 'Choose your robots'),
         h('div', { class: 'select-row' }, ...cards),
+        h('div', { class: 'house-row' }, h('span', {}, 'House robots'),
+          h('span', { class: 'seg' }, ...[0, 2, 4].map((n) => h('button', { class: this.houseCount === n ? 'on' : '', onclick: () => { this.houseCount = n; render(); } }, n === 0 ? 'Off' : String(n)))),
+          h('span', { class: 'hint' }, this.houseCount ? HOUSE_ROBOTS.slice(0, this.houseCount).map((d) => d.name).join(', ') + ' guard the corner patrol zones.' : 'No house robots — just you two.')),
         h('div', { class: 'actions' },
           h('button', { onclick: () => this.mainMenu() }, 'Back'),
           h('button', { class: 'primary', onclick: () => this.fight() }, 'Fight! (Enter)'))));
@@ -253,7 +258,7 @@ class App {
         h('div', { class: 'winner', style: `color:${winner?.colour ?? '#fff'}` }, winner?.name ?? 'Nobody'),
         h('div', { class: 'reason' }, r.reason),
         scores && h('table', { class: 'judges' },
-          h('tr', {}, h('th', {}, ''), ...m.robots.map((rb) => h('th', {}, rb.design.name))),
+          h('tr', {}, h('th', {}, ''), ...m.competitors.map((rb) => h('th', {}, rb.design.name))),
           ...(['aggression', 'control', 'damage', 'style', 'total'] as const).map((k) =>
             h('tr', {}, h('td', { style: 'text-align:left;text-transform:capitalize' }, k), ...scores.map((s) => h('td', {}, s[k].toFixed(1)))))),
         h('div', { class: 'menu' },

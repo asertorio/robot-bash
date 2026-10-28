@@ -21,7 +21,7 @@ export class Hud {
 
   constructor(private match: Match, controllers: string[]) {
     this.timer = h('div', { class: 'timer' }, '3:00');
-    const boxes = match.robots.map((r, i) => {
+    const boxes = match.competitors.map((r, i) => {
       const meta = h('div', { class: 'pmeta' });
       this.metas.push(meta);
       return h('div', { class: `pbox${i % 2 ? ' right' : ''}`, style: `--pc:${PLAYER_COLOURS[i]}` },
@@ -32,7 +32,9 @@ export class Hud {
     this.big = h('div', { class: 'big' });
     this.feed = h('div', { class: 'feed' });
     this.report = h('div', { class: 'report' });
-    this.tags = match.robots.map((_, i) => h('div', { class: 'tag', style: `--pc:${PLAYER_COLOURS[i]}` }, `P${i + 1}`));
+    this.tags = match.robots.map((r, i) => i < match.competitors.length
+      ? h('div', { class: 'tag', style: `--pc:${PLAYER_COLOURS[i]}` }, `P${i + 1}`)
+      : h('div', { class: 'tag house' }, r.design.name));
     this.el = h('div', { class: 'hud' },
       h('div', { class: 'topbar' }, boxes[0], this.timer, boxes[1]),
       this.report, this.big, this.feed, ...this.tags,
@@ -45,6 +47,11 @@ export class Hud {
     m.robots.forEach((r, i) => {
       const tag = this.tags[i];
       const sp = view.screenPos(r);
+      if (i >= m.competitors.length) {
+        tag.style.display = sp ? 'block' : 'none';
+        if (sp) { tag.style.left = `${sp.x}px`; tag.style.top = `${sp.y}px`; }
+        return;
+      }
       const count = m.counts[i];
       tag.style.display = sp && !m.eliminated[i] ? 'block' : 'none';
       if (sp) { tag.style.left = `${sp.x}px`; tag.style.top = `${sp.y}px`; }
@@ -66,7 +73,7 @@ export class Hud {
       this.timer.classList.toggle('low', left < 30);
       this.big.textContent = m.time < 1.2 ? 'Activate!' : '';
     }
-    m.robots.forEach((r, i) => (this.metas[i].innerHTML = this.instruments(r, m.eliminated[i])));
+    m.competitors.forEach((r, i) => (this.metas[i].innerHTML = this.instruments(r, m.eliminated[i])));
 
     const lines = m.commentary.slice(-5);
     this.feed.replaceChildren(...lines.map((l) => {
@@ -75,7 +82,7 @@ export class Hud {
     }));
 
     this.report.style.display = this.showReport ? 'flex' : 'none';
-    if (this.showReport) this.report.replaceChildren(...m.robots.map((r) => this.damageTable(r)));
+    if (this.showReport) this.report.replaceChildren(...m.competitors.map((r) => this.damageTable(r)));
   }
 
   private instruments(r: Robot, out: string | null): string {

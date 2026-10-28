@@ -1,7 +1,8 @@
 import RAPIER from '@dimforge/rapier3d-compat';
-import { Arena } from './arena';
+import { Arena, flamePitRect, floorFlipperRect, inRect } from './arena';
 import { NEUTRAL, type ControlState } from './control';
 import type { RobotDesign } from './design';
+import { HOUSE_CORNERS, HouseDriver, zoneCentre } from './house';
 import { Robot, type Part } from './robot';
 import { vadd, vcross, vdot, vlen, vscale, vsub, type V3 } from './vmath';
 
@@ -66,12 +67,17 @@ export interface MatchOptions {
   spawns?: Array<{ pos: V3; yaw: number }>;
   /** Test bay: no referee, no time limit, nobody is eliminated. */
   sandbox?: boolean;
+  /** House robots, one per corner patrol zone (up to four). */
+  house?: RobotDesign[];
 }
 
 export class Match {
   readonly world: RAPIER.World;
   readonly arena: Arena;
+  /** Competitors first, then house robots. */
   readonly robots: Robot[];
+  readonly competitors: Robot[];
+  readonly houseRobots: Robot[];
   readonly duration: number;
   phase: Phase;
   /** Seconds since activation (negative during the countdown). */
@@ -95,6 +101,9 @@ export class Match {
   private robotColliders: Set<number>[] = [];
   private stepCount = 0;
   private episodes = new Map<string, Episode>();
+  private houseDrivers: HouseDriver[] = [];
+  private onFloorFlipper = 0;
+  private lastRoast = new Map<Robot, number>();
 
   constructor(designs: RobotDesign[], opts: MatchOptions = {}) {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -107,16 +116,23 @@ export class Match {
       { pos: { x: -3.5, y: 0.01, z: 0 }, yaw: Math.PI / 2 },
       { pos: { x: 3.5, y: 0.01, z: 0 }, yaw: -Math.PI / 2 },
     ];
-    this.robots = designs.map((d, i) => new Robot(this.world, d, i, spawns[i].pos, spawns[i].yaw));
+    this.competitors = designs.map((d, i) => new Robot(this.world, d, i, spawns[i].pos, spawns[i].yaw));
+    this.houseRobots = (opts.house ?? []).slice(0, 4).map((d, k) => {
+      const zone = HOUSE_CORNERS[k];
+      const home = zoneCentre(zone);
+      this.houseDrivers.push(new HouseDriver(zone));
+      return new Robot(this.world, d, designs.length + k, { x: home.x, y: 0.01, z: home.z }, Math.atan2(-zone.sx, -zone.sz));
+    });
+    this.robots = [...this.competitors, ...this.houseRobots];
     this.sandbox = opts.sandbox ?? false;
     this.duration = this.sandbox ? Infinity : opts.duration ?? 180;
     this.phase = opts.skipCountdown ? 'fight' : 'countdown';
     this.time = opts.skipCountdown ? 0 : -COUNTDOWN;
-    this.controls = this.robots.map(() => NEUTRAL);
-    this.counts = this.robots.map(() => null);
-    this.eliminated = this.robots.map(() => null);
-    this.lastSelfMove = this.robots.map(() => 0);
-    this.tally = this.robots.map(() => ({ aggression: 0, control: 0, damage: 0, style: 0 }));
+    this.controls = this.competitors.map(() => NEUTRAL);
+    this.counts = this.competitors.map(() => null);
+    this.eliminated = this.competitors.map(() => null);
+    this.lastSelfMove = this.competitors.map(() => 0);
+    this.tally = this.competitors.map(() => ({ aggression: 0, control: 0, damage: 0, style: 0 }));
   }
 
   /** Advance by a frame's worth of real time, in fixed physics steps. */
@@ -139,11 +155,12 @@ export class Match {
       this.say('Activate!', 'major');
     }
 
-    this.robots.forEach((r, i) => {
+    this.competitors.forEach((r, i) => {
       const live = this.phase !== 'countdown' && !this.eliminated[i];
       r.setControl(live ? this.controls[i] ?? NEUTRAL : NEUTRAL);
-      r.update(STEP);
     });
+    if (this.stepCount % 8 === 1) this.driveHouseRobots(8 * STEP);
+    for (const r of this.robots) r.update(STEP);
     this.arena.update(STEP);
 
     const snapshot = this.snapshot();
@@ -226,13 +243,14 @@ export class Match {
       const loss1 = owner1 ? owner1.robot.absorb(owner1.part, half, point, prior) : 0;
       const loss2 = owner2 ? owner2.robot.absorb(owner2.part, half, point, prior) : 0;
       if (this.phase !== 'fight') return;
-      if (owner1 && owner2 && owner1.robot !== owner2.robot) {
-        this.tally[owner2.robot.index].damage += loss1;
-        this.tally[owner1.robot.index].damage += loss2;
+      // Only competitor-on-competitor damage impresses the judges.
+      const t1 = owner1 && this.tally[owner1.robot.index], t2 = owner2 && this.tally[owner2.robot.index];
+      if (t1 && t2 && owner1!.robot !== owner2!.robot) {
+        t2.damage += loss1;
+        t1.damage += loss2;
         if (ep.energy > 2500 && ep.energy - energy <= 2500) {
           // A big hit is good television.
-          const attacker = loss2 > loss1 ? owner1.robot : owner2.robot;
-          this.tally[attacker.index].style += 1;
+          (loss2 > loss1 ? t1 : t2).style += 1;
         }
       }
     });
@@ -256,9 +274,45 @@ export class Match {
 
   // ---------------------------------------------------------------- rules
 
+  private driveHouseRobots(dt: number) {
+    if (this.phase === 'countdown') {
+      for (const h of this.houseRobots) h.setControl(NEUTRAL);
+      return;
+    }
+    // Counted-out robots (still in the arena) are fair game for everyone.
+    const victims = this.competitors.filter((_, i) => this.eliminated[i] === 'immobilised' || (this.counts[i] ?? 0) > 3);
+    const fighting = this.competitors.filter((_, i) => !this.eliminated[i]);
+    this.houseRobots.forEach((h, k) => h.setControl(this.houseDrivers[k].update(h, fighting, victims, dt)));
+  }
+
+  /** Floor flipper and flame pit. */
+  private hazards(dt: number) {
+    const ff = floorFlipperRect();
+    const onFlipper = this.robots.find((r) => inRect(ff, r.position, -0.1) && r.position.y < 0.3);
+    this.onFloorFlipper = onFlipper ? this.onFloorFlipper + dt : 0;
+    if (onFlipper && this.onFloorFlipper > 0.35 && this.arena.fireFloorFlipper()) {
+      this.say(`The floor flipper launches ${onFlipper.design.name}!`, 'major');
+    }
+    const flames = flamePitRect();
+    if (this.arena.flamesOn) {
+      for (const r of this.robots) {
+        let hit = false;
+        for (const p of r.parts) {
+          const c = p.collider;
+          if (!c || p.detached) continue;
+          const pos = c.translation();
+          if (pos.y < 0.9 && inRect(flames, pos)) { r.heat(p, dt); hit = true; }
+        }
+        if (hit && this.time - (this.lastRoast.get(r) ?? -99) > 5) this.say(`${r.design.name} is roasting in the flame pit!`, 'info');
+        if (hit) this.lastRoast.set(r, this.time);
+      }
+    }
+  }
+
   private referee(dt: number) {
-    const alive = () => this.robots.filter((_, i) => !this.eliminated[i]);
-    this.robots.forEach((r, i) => {
+    this.hazards(dt);
+    const alive = () => this.competitors.filter((_, i) => !this.eliminated[i]);
+    this.competitors.forEach((r, i) => {
       if (this.eliminated[i]) return;
       this.robotColliders[i] ??= new Set();
       const handles = this.robotColliders[i];
@@ -293,7 +347,7 @@ export class Match {
       // Judges' notes.
       const t = this.tally[i];
       if (selfMoving) t.control += dt;
-      const opp = this.robots.find((_, j) => j !== i && !this.eliminated[j]);
+      const opp = this.competitors.find((_, j) => j !== i && !this.eliminated[j]);
       if (opp) {
         const to = vsub(opp.position, pos);
         const d = vlen(to);
@@ -305,9 +359,9 @@ export class Match {
 
     if (this.phase === 'fight' && !this.sandbox) {
       const left = alive();
-      if (left.length <= 1 && this.robots.length > 1) {
+      if (left.length <= 1 && this.competitors.length > 1) {
         const winner = left[0];
-        const loser = this.robots.find((_, i) => this.eliminated[i]);
+        const loser = this.competitors.find((_, i) => this.eliminated[i]);
         const reason = loser ? `${loser.design.name} went ${this.eliminated[loser.index]}` : '';
         this.finish({ winner: winner ? winner.index : null, reason });
       } else if (this.time >= this.duration) {
@@ -342,12 +396,12 @@ export class Match {
 
   private judge() {
     const keys: (keyof Tally)[] = ['aggression', 'control', 'damage', 'style'];
-    const scores: JudgeScore[] = this.robots.map(() => ({ aggression: 0, control: 0, damage: 0, style: 0, total: 0 }));
+    const scores: JudgeScore[] = this.competitors.map(() => ({ aggression: 0, control: 0, damage: 0, style: 0, total: 0 }));
     for (const k of keys) {
       const sum = this.tally.reduce((s, t) => s + t[k], 0);
       this.tally.forEach((t, i) => {
         // 25 points per category, shared in proportion to what each robot did.
-        const pts = sum > 0 ? (25 * t[k]) / sum : 25 / this.robots.length;
+        const pts = sum > 0 ? (25 * t[k]) / sum : 25 / this.competitors.length;
         scores[i][k] = Math.round(pts * 10) / 10;
         scores[i].total += pts;
       });

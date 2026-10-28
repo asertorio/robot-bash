@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js';
-import { ARENA, arenaBoxes } from '../sim/arena';
+import { ARENA, arenaBoxes, flamePitRect } from '../sim/arena';
 import type { Match } from '../sim/match';
 import type { Part, Robot } from '../sim/robot';
 
@@ -14,6 +14,11 @@ export class MatchView {
   private blurDiscs: Array<{ robot: Robot; index: number; mesh: THREE.Mesh }> = [];
   private robotGroup = new THREE.Group();
   private trapdoor!: THREE.Mesh;
+  private floorFlipper!: THREE.Group;
+  private flameLight!: THREE.PointLight;
+  private flames: THREE.Points;
+  private flameData: Array<{ p: THREE.Vector3; v: THREE.Vector3; life: number }> = [];
+  private flamePositions = new Float32Array(400 * 3);
   private camTarget = new THREE.Vector3(0, 0, 0);
   private camPos = new THREE.Vector3(0, 12, 14);
   /** 'tv' frames the fight; 'follow' orbits one robot (garage test bay). */
@@ -44,6 +49,11 @@ export class MatchView {
     this.sparks = new THREE.Points(g, new THREE.PointsMaterial({ size: 0.06, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
     this.sparks.frustumCulled = false;
     this.scene.add(this.sparks);
+    const fg = new THREE.BufferGeometry();
+    fg.setAttribute('position', new THREE.BufferAttribute(this.flamePositions, 3));
+    this.flames = new THREE.Points(fg, new THREE.PointsMaterial({ size: 0.22, color: 0xff7a1a, transparent: true, opacity: 0.75, depthWrite: false, blending: THREE.AdditiveBlending }));
+    this.flames.frustumCulled = false;
+    this.scene.add(this.flames);
     this.resize();
     window.addEventListener('resize', () => this.resize());
     this.bindOrbit(canvas);
@@ -105,6 +115,7 @@ export class MatchView {
       wall: new THREE.MeshStandardMaterial({ map: makeStripeTexture(), metalness: 0.4, roughness: 0.5 }),
       pitWall: new THREE.MeshStandardMaterial({ color: 0x0c0c0c, roughness: 1 }),
       pitFloor: new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 1 }),
+      well: new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 1 }),
       barrier: new THREE.MeshStandardMaterial({ color: 0x9cc4e4, transparent: true, opacity: 0.07, roughness: 0.1, depthWrite: false }),
     };
     for (const b of arenaBoxes()) {
@@ -135,6 +146,24 @@ export class MatchView {
     this.trapdoor = new THREE.Mesh(new THREE.BoxGeometry(pit.half * 2 - 0.02, 0.2, pit.half * 2 - 0.02), new THREE.MeshStandardMaterial({ color: 0x2b2b2b, metalness: 0.5, roughness: 0.6 }));
     this.trapdoor.receiveShadow = true;
     this.scene.add(this.trapdoor);
+    // Floor flipper: a striped steel panel hinged at its z0 edge.
+    const ffd = ARENA.floorFlipper;
+    this.floorFlipper = new THREE.Group();
+    const ffPanel = new THREE.Mesh(new THREE.BoxGeometry(ffd.halfWidth * 2 - 0.02, 0.1, ffd.length - 0.02), new THREE.MeshStandardMaterial({ map: makeStripeTexture(), metalness: 0.4, roughness: 0.5 }));
+    ffPanel.position.set(0, -0.05, ffd.length / 2);
+    ffPanel.receiveShadow = ffPanel.castShadow = true;
+    this.floorFlipper.add(ffPanel);
+    this.floorFlipper.position.set(ffd.x, 0, ffd.z0);
+    this.scene.add(this.floorFlipper);
+    // Flame pit grille.
+    const fr = flamePitRect();
+    const grille = new THREE.Mesh(new THREE.PlaneGeometry(fr.x1 - fr.x0, fr.z1 - fr.z0), new THREE.MeshStandardMaterial({ map: makeGrilleTexture(), emissive: 0x401000, roughness: 0.8 }));
+    grille.rotation.x = -Math.PI / 2;
+    grille.position.set((fr.x0 + fr.x1) / 2, 0.003, (fr.z0 + fr.z1) / 2);
+    this.scene.add(grille);
+    this.flameLight = new THREE.PointLight(0xff6a10, 0, 6, 1.5);
+    this.flameLight.position.set((fr.x0 + fr.x1) / 2, 0.8, (fr.z0 + fr.z1) / 2);
+    this.scene.add(this.flameLight);
     // Hazard border round the pit.
     const hazard = new THREE.MeshStandardMaterial({ map: makeStripeTexture(), roughness: 0.6 });
     for (const [dx, dz, w, d] of [[0, pit.half + 0.06, pit.half * 2 + 0.24, 0.12], [0, -pit.half - 0.06, pit.half * 2 + 0.24, 0.12], [pit.half + 0.06, 0, 0.12, pit.half * 2], [-pit.half - 0.06, 0, 0.12, pit.half * 2]] as const) {
@@ -194,6 +223,9 @@ export class MatchView {
       this.syncSparks(m, dt);
       const t = m.arena.trapdoor.translation();
       this.trapdoor.position.set(t.x, t.y, t.z);
+      const fq = m.arena.floorFlipper.rotation();
+      this.floorFlipper.quaternion.set(fq.x, fq.y, fq.z, fq.w);
+      this.syncFlames(m, dt);
       this.updateCamera(m, dt);
     }
     this.renderer.render(this.scene, this.camera);
@@ -251,6 +283,28 @@ export class MatchView {
     g.attributes.color.needsUpdate = true;
   }
 
+  private syncFlames(m: Match, dt: number) {
+    const fr = flamePitRect();
+    const on = m.arena.flamesOn;
+    this.flameLight.intensity += ((on ? 40 + Math.random() * 25 : 0) - this.flameLight.intensity) * Math.min(1, dt * 12);
+    if (on) {
+      for (let i = 0; i < 12 && this.flameData.length < 400; i++) {
+        this.flameData.push({
+          p: new THREE.Vector3(fr.x0 + Math.random() * (fr.x1 - fr.x0), 0.02, fr.z0 + Math.random() * (fr.z1 - fr.z0)),
+          v: new THREE.Vector3((Math.random() - 0.5) * 0.4, 1.6 + Math.random() * 1.6, (Math.random() - 0.5) * 0.4),
+          life: 0.35 + Math.random() * 0.35,
+        });
+      }
+    }
+    this.flameData = this.flameData.filter((f) => (f.life -= dt) > 0);
+    this.flameData.forEach((f, i) => {
+      f.p.addScaledVector(f.v, dt);
+      this.flamePositions.set([f.p.x, f.p.y, f.p.z], i * 3);
+    });
+    this.flames.geometry.setDrawRange(0, this.flameData.length);
+    this.flames.geometry.attributes.position.needsUpdate = true;
+  }
+
   /** TV-style camera: high and to one side, drifting to keep both robots in frame. */
   private updateCamera(m: Match, dt: number) {
     const k = 1 - Math.exp(-dt * 4);
@@ -272,8 +326,8 @@ export class MatchView {
   }
 
   private tvCamera(m: Match, dt: number) {
-    const live = m.robots.filter((_, i) => !m.eliminated[i]);
-    const focus = live.length ? live : m.robots;
+    const live = m.competitors.filter((_, i) => !m.eliminated[i]);
+    const focus = live.length ? live : m.competitors;
     const mid = new THREE.Vector3();
     let spread = 0;
     for (const r of focus) mid.add(new THREE.Vector3(r.position.x, 0, r.position.z));
@@ -370,6 +424,19 @@ function makeStripeTexture(): THREE.CanvasTexture {
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(8, 1);
   return t;
+}
+
+function makeGrilleTexture(): THREE.CanvasTexture {
+  return canvasTexture(256, (g) => {
+    g.fillStyle = '#120a06';
+    g.fillRect(0, 0, 256, 256);
+    g.strokeStyle = '#3a3a3a';
+    g.lineWidth = 7;
+    for (let i = 8; i < 256; i += 22) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i, 256); g.stroke(); }
+    g.strokeStyle = '#f2c200';
+    g.lineWidth = 10;
+    g.strokeRect(5, 5, 246, 246);
+  });
 }
 
 function makeCpzTexture(): THREE.CanvasTexture {

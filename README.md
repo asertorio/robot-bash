@@ -5,11 +5,29 @@ A physics-simulated robot combat game in the spirit of the British TV show
 armour plate, pneumatic rams, spinner blades) and every hit is worked out from
 real forces. There are no health bars.
 
-**Status: v0.2.** Two-robot fights in an arena with a pit, three starter
-robots, a CPU opponent, split-keyboard and gamepad controls with remapping and
-macros, and the **Garage**: build your own robot part by part and drive it in
-a test bay. House robots and tournaments come next. See
-[docs/DESIGN.md](docs/DESIGN.md) for the design and roadmap.
+**Status: v0.3.** Two-robot fights in an arena with a pit, a floor flipper,
+a flame pit and up to four **house robots**. There are three starter robots, a
+CPU opponent, split-keyboard and gamepad controls with remapping and macros,
+and the **Garage**: build your own robot part by part and drive it in a test
+bay. Tournaments come next. See [docs/DESIGN.md](docs/DESIGN.md) for the
+design and roadmap.
+
+## The arena
+
+- **The pit:** drive over the red button to open it. Fall in and you're out.
+- **Floor flipper:** park on the striped panel and it fires, throwing a robot
+  into the air.
+- **Flame pit:** the grille burns on a cycle. Tyres and plastic armour (HDPE,
+  polycarbonate) cook fast; steel barely notices; internals behind armour get
+  some of the heat.
+- **House robots** (choose 0, 2 or 4 on the select screen) each guard a
+  corner patrol zone and attack anything that strays in. Once a robot is
+  being counted out, they all come out to finish it off:
+  - **Ironjaw:** a 270 kg lifter on a flow-limited 60-bar ram. It lifts and
+    holds.
+  - **Buzzard:** a vertical circular saw.
+  - **Shovelhead:** a 290 kg bulldozer with a hardened scoop.
+  - **Thresher:** a flail bar at head height.
 
 ## The Garage
 

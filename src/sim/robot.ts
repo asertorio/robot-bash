@@ -2,7 +2,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { material } from '../data/materials';
 import { BATTERIES, GEARBOX, MOTORS, RAMS, TANKS, VALVES, WHEELS, lookup, type BatterySpec, type MotorSpec } from '../data/parts';
 import type { ControlState } from './control';
-import { COMPONENT_TOUGHNESS, DAMAGE, WHEEL_TOUGHNESS, damageFor, plateToughness, transmission, type Toughness } from './damage';
+import { COMPONENT_TOUGHNESS, DAMAGE, HEAT, WHEEL_TOUGHNESS, damageFor, plateToughness, transmission, type Toughness } from './damage';
 import type { FlipperDef, RobotDesign, ShellPanel, SpinnerDef, Vec3 } from './design';
 import { dist, panelArea, panelFaceArea, panelVertices } from './geometry';
 import { DEBRIS_GROUPS, GHOST_GROUPS, robotGroups, wheelBodyGroups, wheelTyreGroups } from './groups';
@@ -70,6 +70,7 @@ interface FlipperRuntime {
   gasLeft: number;
   gasPerShot: number;
   timeConstant: number;
+  maxRate: number;
   firing: boolean;
   fireTime: number;
   shotScale: number;
@@ -275,6 +276,7 @@ export class Robot {
       gasLeft: tank.capacity,
       gasPerShot: nums.gasPerShot,
       timeConstant: valve.timeConstant,
+      maxRate: valve.maxRate ?? Infinity,
       firing: false, fireTime: 0, shotScale: 1, wasPressed: false,
     });
   }
@@ -473,6 +475,11 @@ export class Robot {
       f.fireTime += dt;
       const p = f.pressure * f.shotScale * (1 - Math.exp(-f.fireTime / f.timeConstant));
       torque = p * 1e5 * f.area * f.def.leverArm * hingeHealth;
+      // A flow-limited valve can't feed the ram faster than this: it lifts, not throws.
+      if (Number.isFinite(f.maxRate)) {
+        const rate = vdot(vsub(f.body.angvel(), this.chassis.angvel()), qrotate(this.rotation, HINGE_AXIS));
+        torque *= Math.max(0, Math.min(1, (f.maxRate - rate) / (0.3 * f.maxRate)));
+      }
     } else if (angle > -f.restAngle + 0.02) {
       // Retract on the low-pressure side of the ram.
       torque = -0.08 * f.pressure * 1e5 * f.area * f.def.leverArm;
@@ -549,6 +556,17 @@ export class Robot {
       for (const f of this.flippers) if (f.plate === part) hurt(f.gas, prior * passOn, total * passOn);
     }
     return loss;
+  }
+
+  /** Flame-pit heat on one part for `dt` seconds. */
+  heat(p: Part, dt: number) {
+    if (p.detached || p.failed) return;
+    let rate = 0;
+    if (p.kind === 'panel' && p.panel) rate = HEAT.plate[p.panel.material] ?? 0.01;
+    else if (p.kind === 'flipper' || p.kind === 'spinner') rate = 0.004;
+    else rate = (HEAT as unknown as Record<string, number>)[p.kind] ?? 0.01;
+    if (p.internal && !p.exposed) rate *= HEAT.shielded;
+    p.condition = Math.max(0, p.condition - rate * dt);
   }
 
   /** Turn condition changes into consequences: commentary, detachments, failures. */

@@ -53,6 +53,8 @@ export interface RamSpec extends CatalogPart {
 export interface ValveSpec extends CatalogPart {
   /** Pressure rise time constant, s. Smaller = snappier flip. */
   timeConstant: number;
+  /** Flow-limited valves cap how fast the ram can extend: max plate speed, rad/s. */
+  maxRate?: number;
 }
 
 export interface TankSpec extends CatalogPart {
@@ -150,6 +152,10 @@ export const RAMS: Record<string, RamSpec> = {
     id: 'ram80', name: '80mm bore ram, 200mm stroke', mass: 4.5, cost: 520, sourcing: 'specialist', swapMinutes: 30,
     bore: 80, stroke: 200, maxPressure: 25,
   },
+  ram100hp: {
+    id: 'ram100hp', name: '100mm high-pressure ram', mass: 9.0, cost: 2200, sourcing: 'custom', swapMinutes: 60,
+    bore: 100, stroke: 250, maxPressure: 60,
+  },
   ram80hp: {
     id: 'ram80hp', name: '80mm high-pressure ram', mass: 6.0, cost: 1400, sourcing: 'custom', swapMinutes: 45,
     bore: 80, stroke: 200, maxPressure: 60,
@@ -160,6 +166,11 @@ export const VALVES: Record<string, ValveSpec> = {
   std: {
     id: 'std', name: 'Standard solenoid valve', mass: 1.0, cost: 120, sourcing: 'common', swapMinutes: 15,
     timeConstant: 0.06,
+  },
+  lifter: {
+    id: 'lifter', name: 'Proportional lifter valve', mass: 1.2, cost: 260, sourcing: 'specialist', swapMinutes: 20,
+    timeConstant: 0.35,
+    maxRate: 1.4,
   },
   dump: {
     id: 'dump', name: 'High-flow dump valve', mass: 1.6, cost: 380, sourcing: 'specialist', swapMinutes: 20,
