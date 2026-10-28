@@ -17,18 +17,24 @@ describe('templates', () => {
 
 describe('driving', () => {
   test('a robot left alone stays put', () => {
+    for (const d of TEMPLATES) {
+      const m = new Match([d], { skipCountdown: true });
+      run(m, 0.5);
+      const z = m.robots[0].position.z;
+      run(m, 4);
+      expect(Math.abs(m.robots[0].position.z - z)).toBeLessThan(0.01);
+      m.free();
+    }
     const m = new Match([WEDGEHOG], { skipCountdown: true });
-    run(m, 4);
-    expect(Math.abs(m.robots[0].position.z + 3.5)).toBeLessThan(0.01);
     m.free();
   });
 
-  test.each(TEMPLATES.map((t) => [t.name, t]))('%s reaches close to its predicted top speed', (_, d) => {
+  test.each(TEMPLATES.filter((t) => computeStats(t).topSpeed !== null).map((t) => [t.name, t]))('%s reaches close to its predicted top speed', (_, d) => {
     const m = new Match([d], { skipCountdown: true });
     run(m, 0.3);
     run(m, 1.6, () => [drive(1)]);
     const v = m.robots[0].chassis.linvel();
-    const predicted = computeStats(d).topSpeed;
+    const predicted = computeStats(d).topSpeed!;
     expect(Math.hypot(v.x, v.z)).toBeGreaterThan(predicted * 0.7);
     expect(Math.hypot(v.x, v.z)).toBeLessThan(predicted * 1.15);
     m.free();
@@ -50,7 +56,7 @@ describe('weapons', () => {
     let peak = 0;
     run(m, 1.5, (t) => [{ ...N, weapon: t < 1.2 }, N], () => { peak = Math.max(peak, m.robots[1].position.y); });
     expect(peak).toBeGreaterThan(0.3);
-    expect(m.robots[0].flipperGas[0]).toBeLessThan(2000);
+    expect(m.robots[0].gasLeft).toBeLessThan(m.robots[0].gasCapacity);
     m.free();
   });
 
@@ -59,20 +65,20 @@ describe('weapons', () => {
     run(m, 0.1, () => [{ ...N, weapon: true }]);
     run(m, 5);
     const predicted = computeStats(WHIRLWIND).weapons[0];
-    if (predicted.kind !== 'spinner') throw new Error('expected spinner');
-    expect(m.robots[0].spinnerRpm()[0]).toBeGreaterThan(predicted.numbers.maxRpm * 0.8);
+    expect(predicted.kind).toBe('spinner');
+    expect(m.robots[0].rotors()[0].rpm).toBeGreaterThan(predicted.maxRpm! * 0.8);
     m.free();
   });
 
   test('a spun-up spinner driven into an opponent damages something', () => {
     const m = new Match([WHIRLWIND, WEDGEHOG], { skipCountdown: true, spawns: spawnAt([0, 0, 0], [0, 1.5, Math.PI / 2]) });
-    const s = m.robots[0].spinners[0];
-    s.on = true;
-    s.body.setAngvel({ x: 0, y: 170, z: 0 }, true);
+    const s = m.robots[0].actuators.find((a) => a.def.input.mode === 'toggle')!;
+    s.toggled = true;
+    s.child.body.setAngvel({ x: 0, y: 170, z: 0 }, true);
     run(m, 1.5, () => [drive(0.6), N]);
     const worst = Math.min(...m.robots[1].parts.map((p) => p.condition));
     expect(worst).toBeLessThan(1);
-    expect(m.robots[0].spinnerRpm()[0]).toBeLessThan(1600); // hits cost the blade speed
+    expect(m.robots[0].rotors()[0].rpm).toBeLessThan(1600); // hits cost the blade speed
     m.free();
   });
 });

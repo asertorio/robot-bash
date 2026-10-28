@@ -104,6 +104,7 @@ export class Match {
   private houseDrivers: HouseDriver[] = [];
   private onFloorFlipper = 0;
   private lastRoast = new Map<Robot, number>();
+  private lastCountSay: number[] = [];
 
   constructor(designs: RobotDesign[], opts: MatchOptions = {}) {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -335,13 +336,16 @@ export class Match {
       const v = r.chassis.linvel();
       const speed = Math.hypot(v.x, v.z);
       const trying = Math.abs(c.left) + Math.abs(c.right) > 0.2;
-      const active = speed > 0.25 || Math.abs(r.chassis.angvel().y) > 0.8 || this.touchingOpponent(i);
+      const active = speed > 0.12 || Math.abs(r.chassis.angvel().y) > 0.6 || this.touchingOpponent(i);
       const selfMoving = trying && active && r.tractionWheels() > 0;
       if (selfMoving) this.lastSelfMove[i] = this.time;
       const still = this.time - this.lastSelfMove[i] - COUNT_GRACE;
       const was = this.counts[i];
       this.counts[i] = still > 0 ? still : null;
-      if (was === null && this.counts[i] !== null) this.say(`The referee is counting out ${r.design.name}…`, 'info');
+      if (was === null && this.counts[i] !== null && this.time - (this.lastCountSay[i] ?? -99) > 8) {
+        this.lastCountSay[i] = this.time;
+        this.say(`The referee is counting out ${r.design.name}…`, 'info');
+      }
       if (still >= COUNT_OUT) return this.eliminate(i, 'immobilised');
 
       // Judges' notes.

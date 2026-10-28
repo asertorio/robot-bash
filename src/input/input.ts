@@ -25,7 +25,7 @@ export function mixControls(profile: ControlProfile, read: BindingReader, macro:
     left /= over;
     right /= over;
   }
-  return { left, right, weapon: level('weapon') > 0.5, weapon2: level('weapon2') > 0.5 };
+  return { left, right, weapon: level('weapon') > 0.5, weapon2: level('weapon2') > 0.5, weapon3: level('weapon3') > 0.5, weapon4: level('weapon4') > 0.5 };
 }
 
 /** Runs one player's macros: a trigger press plays its steps in order. */

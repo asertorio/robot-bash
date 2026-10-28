@@ -1,7 +1,7 @@
 import { ARENA } from './arena';
 import type { ControlState } from './control';
 import type { Robot } from './robot';
-import { steerTo } from './ai';
+import { steerTo, useWeapons } from './ai';
 import type { V3 } from './vmath';
 
 /** The corner patrol zone a house robot guards. */
@@ -29,7 +29,7 @@ export function inZone(z: Zone, p: V3, margin = 0): boolean {
 export class HouseDriver {
   private fireFor = 0;
   private cooldown = 0;
-  private pressedLast = false;
+  private pressed = new Set<string>();
 
   constructor(readonly zone: Zone) {}
 
@@ -62,13 +62,8 @@ export class HouseDriver {
     }
 
     // Lifters hold while the button is held; spinners just stay on.
-    if (this.fireFor > 0) {
-      this.fireFor -= dt;
-      if (me.flippers.length) out.weapon = true;
-    }
-    if (me.spinners.some((s) => s.joint && !s.on)) out.weapon = !this.pressedLast;
-    else if (me.spinners.length) out.weapon = false;
-    this.pressedLast = out.weapon;
+    if (this.fireFor > 0) this.fireFor -= dt;
+    useWeapons(me, out, this.fireFor > 0, this.pressed);
     return out;
   }
 }

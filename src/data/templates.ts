@@ -1,11 +1,13 @@
 import type { RobotDesign } from '../sim/design';
+import { fromV1 } from '../sim/legacy';
+import { EXAMPLES } from './examples';
 
 /**
  * Starter robots. Original designs in the style of classic heavyweights
  * (~100 kg class), built entirely from catalogue parts.
  */
 
-export const WEDGEHOG: RobotDesign = {
+export const WEDGEHOG: RobotDesign = fromV1({
   schema: 1,
   id: 'wedgehog',
   name: 'Wedgehog',
@@ -31,9 +33,9 @@ export const WEDGEHOG: RobotDesign = {
   },
   battery: { part: 'nicd24', position: [0, 0.1, -0.2] },
   weapons: [],
-};
+});
 
-export const FLIPSIDE: RobotDesign = {
+export const FLIPSIDE: RobotDesign = fromV1({
   schema: 1,
   id: 'flipside',
   name: 'Flipside',
@@ -72,9 +74,9 @@ export const FLIPSIDE: RobotDesign = {
       gasPosition: [0, 0.12, 0.12],
     },
   ],
-};
+});
 
-export const WHIRLWIND: RobotDesign = {
+export const WHIRLWIND: RobotDesign = fromV1({
   schema: 1,
   id: 'whirlwind',
   name: 'Whirlwind',
@@ -110,12 +112,12 @@ export const WHIRLWIND: RobotDesign = {
       motorPosition: [0, 0.1, -0.1],
     },
   ],
-};
+});
 
-export const TEMPLATES: RobotDesign[] = [WEDGEHOG, FLIPSIDE, WHIRLWIND];
+export const TEMPLATES: RobotDesign[] = [WEDGEHOG, FLIPSIDE, WHIRLWIND, ...EXAMPLES];
 
 /** Test-bay target: a heavy steel box that just sits there and takes it. */
-export const CRASH_TEST_DUMMY: RobotDesign = {
+export const CRASH_TEST_DUMMY: RobotDesign = fromV1({
   schema: 1,
   id: 'dummy',
   name: 'Crash Test Dummy',
@@ -134,4 +136,4 @@ export const CRASH_TEST_DUMMY: RobotDesign = {
   },
   battery: { part: 'nicd24', position: [0, 0.1, -0.2] },
   weapons: [],
-};
+});

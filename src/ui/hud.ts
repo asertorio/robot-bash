@@ -92,14 +92,16 @@ export class Hud {
     if (!r.hasControl) bits.push('<span class="bad">NO RADIO</span>');
     else if (!r.powered) bits.push('<span class="bad">NO POWER</span>');
     bits.push(`Battery <b class="${pct < 20 ? 'warn' : ''}">${pct}%</b> · ${Math.round(r.current)} A`);
-    r.flippers.forEach((f) => {
-      const shots = Math.floor(f.gasLeft / f.gasPerShot);
-      bits.push(f.joint ? `Gas <b class="${shots < 4 ? 'warn' : ''}">${Math.round(f.gasLeft)} g</b> (${shots} flips)` : '<span class="bad">Flipper gone</span>');
-    });
-    r.spinners.forEach((s, i) => {
-      const rpm = Math.round(r.spinnerRpm()[i]);
-      bits.push(s.joint ? `Spinner <b>${rpm.toLocaleString()} rpm</b>${s.on ? '' : ' (off)'}` : '<span class="bad">Spinner gone</span>');
-    });
+    if (r.gasCapacity > 0) {
+      const pneu = r.actuators.filter((a) => a.def.type === 'pneumatic');
+      const per = pneu.length ? pneu.reduce((t, a) => t + a.gasPerShot, 0) / pneu.length : 1;
+      const shots = Math.floor(r.gasLeft / per);
+      bits.push(`Gas <b class="${shots < 4 ? 'warn' : ''}">${Math.round(r.gasLeft)} g</b> (${shots} shots)`);
+    }
+    for (const rot of r.rotors()) {
+      const gone = !rot.actuator.child.joint;
+      bits.push(gone ? `<span class="bad">${rot.actuator.driven.label} gone</span>` : `${rot.actuator.driven.label} <b>${Math.round(rot.rpm).toLocaleString()} rpm</b>${rot.on ? '' : ' (off)'}`);
+    }
     return bits.join('<br>');
   }
 

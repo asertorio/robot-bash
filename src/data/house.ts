@@ -1,4 +1,5 @@
 import type { RobotDesign } from '../sim/design';
+import { fromV1 } from '../sim/legacy';
 
 /**
  * House robots: the arena's resident heavies. Original designs in the spirit
@@ -6,7 +7,7 @@ import type { RobotDesign } from '../sim/design';
  * to their corner patrol zones unless a robot has been counted out.
  */
 
-export const IRONJAW: RobotDesign = {
+export const IRONJAW: RobotDesign = fromV1({
   schema: 1,
   id: 'house-ironjaw',
   name: 'Ironjaw',
@@ -33,9 +34,9 @@ export const IRONJAW: RobotDesign = {
     plate: { width: 0.7, length: 0.62, thickness: 12, material: 'hardox' },
     leverArm: 0.18, maxAngle: 65, gasPosition: [0, 0.14, 0.1],
   }],
-};
+});
 
-export const BUZZARD: RobotDesign = {
+export const BUZZARD: RobotDesign = fromV1({
   schema: 1,
   id: 'house-buzzard',
   name: 'Buzzard',
@@ -61,9 +62,9 @@ export const BUZZARD: RobotDesign = {
     blade: { shape: 'disc', length: 0.52, width: 0.52, thickness: 12, material: 'hardox' },
     position: [0, 0.29, 0.6], motorPosition: [0, 0.16, 0.15],
   }],
-};
+});
 
-export const SHOVELHEAD: RobotDesign = {
+export const SHOVELHEAD: RobotDesign = fromV1({
   schema: 1,
   id: 'house-shovelhead',
   name: 'Shovelhead',
@@ -85,9 +86,9 @@ export const SHOVELHEAD: RobotDesign = {
   },
   battery: { part: 'nicd36l', position: [0, 0.14, -0.35] },
   weapons: [],
-};
+});
 
-export const THRESHER: RobotDesign = {
+export const THRESHER: RobotDesign = fromV1({
   schema: 1,
   id: 'house-thresher',
   name: 'Thresher',
@@ -113,6 +114,6 @@ export const THRESHER: RobotDesign = {
     blade: { shape: 'bar', length: 1.1, width: 0.08, thickness: 15, material: 'mildSteel' },
     position: [0, 0.54, 0], motorPosition: [0, 0.16, 0],
   }],
-};
+});
 
 export const HOUSE_ROBOTS: RobotDesign[] = [IRONJAW, BUZZARD, SHOVELHEAD, THRESHER];

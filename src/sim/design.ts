@@ -1,99 +1,107 @@
 /**
- * RobotDesign is the saved/shared robot format: pure data, no behaviour.
- * Templates, the builder, save files and (later) AI-assisted design all
- * produce one of these. Robot-local frame: +Z forward, +Y up, +X left,
- * origin at the centre of the footprint on the floor. Lengths in metres
- * unless a field says otherwise.
+ * RobotDesign v2: a robot is a tree of parts. Each part has a shape and a
+ * material (or is a catalogue component), sits somewhere on its parent, and
+ * is attached by a joint — fixed, a hinge, or a slider. Any hinge or slider
+ * can carry an actuator (DC motor, pneumatic ram, or position servo) wired
+ * to one of the robot's control inputs.
+ *
+ * That's enough to describe wedges, flippers, spinners, full-body spinners,
+ * twin flippers, rolling spheres, walkers, axes, lifters, clampers… anything
+ * that's rigid bits, joints and motors.
+ *
+ * Frames: robot +Z forward, +Y up, +X left; origin on the floor at the
+ * centre. Each part's position/rotation is relative to its parent part's
+ * frame (the root's is relative to the robot origin). Rotations are Euler
+ * angles in degrees, applied X then Y then Z. Lengths in metres unless a
+ * field says mm.
  */
 
 export type Vec3 = [number, number, number];
 
-export interface ShellPanel {
+export type Shape =
+  | { type: 'box'; size: Vec3 }
+  /** Full height at the back (−Z), sloping down to `lip` at the front (+Z). */
+  | { type: 'wedge'; size: Vec3; lip: number }
+  /** Axis along the part's Y. */
+  | { type: 'cylinder'; radius: number; length: number }
+  /** Axis along Y, point at +Y. */
+  | { type: 'cone'; radius: number; length: number }
+  | { type: 'sphere'; radius: number }
+  /** Straight section `length` long along Y, rounded ends. */
+  | { type: 'capsule'; radius: number; length: number }
+  /** Convex hull of arbitrary points. */
+  | { type: 'hull'; points: Vec3[] };
+
+export type InputSource = 'left' | 'right' | 'throttle' | 'steer' | 'button1' | 'button2' | 'button3' | 'button4' | 'gait';
+
+/** What drives an actuator. */
+export interface InputDef {
+  source: InputSource;
+  /** Analog sources and gait: multiplier (−1 reverses). */
+  scale?: number;
+  /** Buttons: 'hold' is on while held; 'toggle' flips on each press. */
+  mode?: 'hold' | 'toggle';
+  /** Gait: which side's stride clock to follow. */
+  side?: 'left' | 'right';
+  /** Gait: phase offset, degrees. */
+  phase?: number;
+  /** Gait: 'swing' sweeps back and forth; 'lift' raises during the forward swing. */
+  pattern?: 'swing' | 'lift';
+}
+
+export type ActuatorDef =
+  /** Continuous rotation through a gearbox (wheels, spinners, drums). Hinges only. */
+  | { type: 'motor'; motor: string; gear: number; input: InputDef }
+  /** Gas ram: flippers, lifters, axes, spikes. `leverArm` (m) applies on hinges. */
+  | { type: 'pneumatic'; ram: string; valve: string; pressure: number; leverArm: number; input: InputDef }
+  /**
+   * Position-controlled motor (legs, clamps, steering). `targets` are the joint
+   * positions (degrees for hinges, mm for sliders) at input −1, 0 and +1.
+   */
+  | { type: 'servo'; motor: string; gear: number; input: InputDef; targets: Vec3 };
+
+export type JointDef =
+  | { type: 'fixed' }
+  /** Rotates about `axis` (in the part's frame). Limits in degrees from the built pose. */
+  | { type: 'hinge'; axis: Vec3; limits?: [number, number]; actuator?: ActuatorDef }
+  /** Slides along `axis`. Limits in mm from the built pose. */
+  | { type: 'slider'; axis: Vec3; limits: [number, number]; actuator?: ActuatorDef };
+
+export type ComponentDef =
+  | { type: 'battery'; part: string }
+  | { type: 'gasTank'; part: string }
+  | { type: 'ballast'; mass: number };
+
+export interface PartDef {
   id: string;
   label: string;
-  shape: 'box' | 'wedge';
-  /** [width (x), height (y), length (z)] of the outer envelope. */
-  size: Vec3;
-  /** Centre of the envelope. */
+  /** Parent part id; exactly one part (the chassis) has null. */
+  parent: string | null;
+  /** Where this part's origin (and its joint) sits in the parent's frame. */
   position: Vec3;
-  material: string;
-  /** Plate thickness, mm. The panel is a hollow shell of this thickness. */
-  thickness: number;
-  /** Wedge only: height of the leading edge (0 = knife edge). */
-  lipHeight?: number;
+  /** Degrees, XYZ. */
+  rotation: Vec3;
+  joint: JointDef;
+  role: 'structure' | 'wheel' | 'component';
+  /** Structure: its shape, centred on `shapeOffset` from the part origin. */
+  shape?: Shape;
+  shapeOffset?: Vec3;
+  material?: string;
+  /** Hollow shell with this wall thickness (mm). Omit for a solid part. */
+  wall?: number;
+  /** Wheel: catalogue wheel. Its axle is the hinge axis. */
+  wheel?: string;
+  /** Component: mass-only internals. */
+  component?: ComponentDef;
+  /** Paint (CSS hex). Defaults to the robot colour for structure. */
+  colour?: string;
 }
-
-export interface WheelMount {
-  wheel: string;
-  /** Axle centre. */
-  position: Vec3;
-  side: 'left' | 'right';
-}
-
-export interface DriveDef {
-  motor: string;
-  motorsPerSide: number;
-  /** Motor revolutions per wheel revolution. */
-  gearRatio: number;
-  wheels: WheelMount[];
-  /** Where the drive motors sit (one per side, mirrored in x). */
-  motorPosition: Vec3;
-}
-
-/**
- * A low-friction slider that stops a two-wheeled robot tipping onto its nose
- * or tail. Mount it a few mm clear of the floor so the wheels keep the weight.
- */
-export interface Skid {
-  position: Vec3;
-  radius: number;
-}
-
-export interface FlipperDef {
-  kind: 'flipper';
-  ram: string;
-  valve: string;
-  tank: string;
-  /** Regulated working pressure, bar. Capped by the ram's rating. */
-  pressure: number;
-  /** Centre of the hinge line (hinge axis runs along X). */
-  hinge: Vec3;
-  /** The plate extends forward (+Z) from the hinge when closed. Thickness in mm. */
-  plate: { width: number; length: number; thickness: number; material: string };
-  /** Distance from hinge to where the ram acts on the plate, m. */
-  leverArm: number;
-  /** Max opening angle, degrees. */
-  maxAngle: number;
-  /** Where the ram + tank sit inside the chassis. */
-  gasPosition: Vec3;
-}
-
-export interface SpinnerDef {
-  kind: 'spinner';
-  motor: string;
-  /** Motor revolutions per blade revolution. */
-  beltRatio: number;
-  /** 'horizontal' blades spin flat (vertical axle); 'vertical' blades spin on an X axle. */
-  orientation: 'horizontal' | 'vertical';
-  /** Bar: length × width. Disc: length is the diameter. Thickness in mm. */
-  blade: { shape: 'bar' | 'disc'; length: number; width: number; thickness: number; material: string };
-  /** Hub centre. */
-  position: Vec3;
-  motorPosition: Vec3;
-}
-
-export type WeaponDef = FlipperDef | SpinnerDef;
 
 export interface RobotDesign {
-  schema: 1;
+  schema: 2;
   id: string;
   name: string;
   description: string;
-  /** Paint colour, CSS hex. */
   colour: string;
-  shell: ShellPanel[];
-  skids: Skid[];
-  drive: DriveDef;
-  battery: { part: string; position: Vec3 };
-  weapons: WeaponDef[];
+  parts: PartDef[];
 }

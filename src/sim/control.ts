@@ -7,10 +7,13 @@ export interface ControlState {
   left: number;
   /** Right drive side throttle, −1..1. */
   right: number;
-  /** Primary weapon channel (flipper fire / spinner toggle). */
+  /** Weapon button 1. */
   weapon: boolean;
-  /** Secondary weapon channel (spinner brake). */
+  /** Weapon button 2. */
   weapon2: boolean;
+  /** Weapon buttons 3 and 4, for robots with more weapons. */
+  weapon3?: boolean;
+  weapon4?: boolean;
 }
 
 export const NEUTRAL: ControlState = { left: 0, right: 0, weapon: false, weapon2: false };

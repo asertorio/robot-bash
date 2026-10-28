@@ -12,6 +12,8 @@ export class MatchView {
   private match: Match | null = null;
   private partMeshes: Array<{ part: Part; mesh: THREE.Object3D; base: THREE.Color; mats: THREE.MeshStandardMaterial[] }> = [];
   private blurDiscs: Array<{ robot: Robot; index: number; mesh: THREE.Mesh }> = [];
+  private highlighted: string | null = null;
+  private raycaster = new THREE.Raycaster();
   private robotGroup = new THREE.Group();
   private trapdoor!: THREE.Mesh;
   private floorFlipper!: THREE.Group;
@@ -202,10 +204,9 @@ export class MatchView {
         this.robotGroup.add(mesh);
         this.partMeshes.push({ part, mesh, base: new THREE.Color(part.colour ?? 0x888888), mats });
       }
-      r.spinners.forEach((s, index) => {
-        const radius = s.def.blade.shape === 'disc' ? s.def.blade.length / 2 : s.def.blade.length / 2;
+      r.rotors().forEach((rot, index) => {
         const disc = new THREE.Mesh(
-          new THREE.CircleGeometry(radius, 48),
+          new THREE.CircleGeometry(rot.radius, 48),
           new THREE.MeshBasicMaterial({ color: 0xd8dde3, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }),
         );
         this.robotGroup.add(disc);
@@ -241,21 +242,18 @@ export class MatchView {
       mesh.position.set(p.x, p.y, p.z);
       mesh.quaternion.set(q.x, q.y, q.z, q.w);
       // Battle damage shows as scorching, not as a bar.
-      if (part.kind === 'panel' || part.kind === 'flipper') {
+      if (part.kind === 'structure') {
         mats[0].color.copy(base).lerp(scorch, (1 - Math.max(0, part.condition)) * 0.75);
       }
+      mats[0].emissive.setHex(this.highlighted && part.id === this.highlighted ? 0x806000 : 0x000000);
     }
     for (const { robot, index, mesh } of this.blurDiscs) {
-      const s = robot.spinners[index];
-      const rpm = robot.spinnerRpm()[index];
-      if (!s.joint) { mesh.visible = false; continue; }
-      const p = s.body.translation(), q = s.body.rotation();
-      mesh.position.set(p.x, p.y, p.z);
-      mesh.quaternion.set(q.x, q.y, q.z, q.w);
+      const rot = robot.rotors()[index];
+      if (!rot || !rot.actuator.child.joint) { mesh.visible = false; continue; }
+      mesh.position.set(rot.centre.x, rot.centre.y, rot.centre.z);
       // Circle geometry faces +Z; turn it to face along the spin axis.
-      const axis = s.def.orientation === 'horizontal' ? new THREE.Euler(-Math.PI / 2, 0, 0) : new THREE.Euler(0, Math.PI / 2, 0);
-      mesh.quaternion.multiply(new THREE.Quaternion().setFromEuler(axis));
-      (mesh.material as THREE.MeshBasicMaterial).opacity = Math.min(0.35, rpm / 3000);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(rot.axis.x, rot.axis.y, rot.axis.z));
+      (mesh.material as THREE.MeshBasicMaterial).opacity = Math.min(0.35, rot.rpm / 3000);
     }
   }
 
@@ -343,6 +341,26 @@ export class MatchView {
     this.camera.lookAt(this.camTarget);
   }
 
+  /** Glow a design part (garage selection), or nothing. */
+  highlight(partId: string | null) {
+    this.highlighted = partId;
+  }
+
+  /** The design part under a screen point, if any. */
+  pick(clientX: number, clientY: number, robotIndex = 0): string | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const robot = this.match?.robots[robotIndex];
+    const candidates = this.partMeshes.filter((m) => robot?.parts.includes(m.part) && m.mesh.visible && m.part.def);
+    // Only solid surfaces count (edge outlines would catch clicks from far away).
+    const hits = this.raycaster.intersectObjects(candidates.map((c) => c.mesh), true).filter((h) => (h.object as THREE.Mesh).isMesh && !(h.object as THREE.LineSegments).isLineSegments);
+    if (!hits.length) return null;
+    let o: THREE.Object3D | null = hits[0].object;
+    while (o && !candidates.some((c) => c.mesh === o)) o = o.parent;
+    return candidates.find((c) => c.mesh === o)?.part.id ?? null;
+  }
+
   /** Screen position of a robot (for name tags), or null if behind camera. */
   screenPos(r: Robot): { x: number; y: number } | null {
     const p = r.position;
@@ -359,7 +377,10 @@ function buildPartMesh(part: Part): { mesh: THREE.Object3D; mats: THREE.MeshStan
   let geo: THREE.BufferGeometry;
   if (v.type === 'hull') geo = new ConvexGeometry(v.points.map((p) => new THREE.Vector3(...p)));
   else if (v.type === 'box') geo = new THREE.BoxGeometry(v.half[0] * 2, v.half[1] * 2, v.half[2] * 2);
-  else geo = new THREE.CylinderGeometry(v.radius, v.radius, v.halfHeight * 2, 28);
+  else if (v.type === 'cylinder') geo = new THREE.CylinderGeometry(v.radius, v.radius, v.halfHeight * 2, 28);
+  else if (v.type === 'cone') geo = new THREE.ConeGeometry(v.radius, v.halfHeight * 2, 28);
+  else if (v.type === 'capsule') geo = new THREE.CapsuleGeometry(v.radius, v.halfHeight * 2, 6, 16);
+  else geo = new THREE.SphereGeometry(v.radius, 24, 16);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.castShadow = true;
   mesh.receiveShadow = true;

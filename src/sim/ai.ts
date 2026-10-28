@@ -30,7 +30,7 @@ export class CpuDriver {
   private stuckFor = 0;
   private reverseFor = 0;
   private fireCooldown = 0;
-  private pressedLast = false;
+  private pressed = new Set<string>();
 
   update(me: Robot, foe: Robot | undefined, pitOpen: boolean, dt: number): ControlState {
     const out: ControlState = { left: 0, right: 0, weapon: false, weapon2: false };
@@ -82,25 +82,34 @@ export class CpuDriver {
   }
 
   private weapons(me: Robot, out: ControlState, dist: number, bearing: number): ControlState {
-    const result = this.chooseWeapons(me, out, dist, bearing);
-    // Weapon channels act on a press, so let go between presses.
-    if (result.weapon && this.pressedLast) result.weapon = false;
-    this.pressedLast = result.weapon;
-    return result;
+    const fire = this.fireCooldown <= 0 && ((dist < 1.1 && Math.abs(bearing) < 0.45) || me.uprightness < -0.3);
+    if (fire) this.fireCooldown = 1.2;
+    return useWeapons(me, out, fire, this.pressed);
   }
+}
 
-  private chooseWeapons(me: Robot, out: ControlState, dist: number, bearing: number): ControlState {
-    for (const f of me.flippers) {
-      const reach = f.def.plate.length + 0.5;
-      const ready = this.fireCooldown <= 0;
-      // Fire when they're on the flipper, or to self-right.
-      if (ready && ((dist < reach && Math.abs(bearing) < 0.45) || me.uprightness < -0.3)) {
-        out.weapon = true;
-        this.fireCooldown = 1.2;
-      }
+const BUTTONS = ['button1', 'button2', 'button3', 'button4'] as const;
+const FIELD = { button1: 'weapon', button2: 'weapon2', button3: 'weapon3', button4: 'weapon4' } as const;
+
+/**
+ * Work every weapon button the robot has: keep toggled spinners running, and
+ * press attack buttons when `attack` is true. `pressed` remembers last frame's
+ * presses so toggles see a fresh press each time.
+ */
+export function useWeapons(me: Robot, out: ControlState, attack: boolean, pressed: Set<string>): ControlState {
+  const uses = me.buttonUses();
+  for (const b of BUTTONS) {
+    const kinds = uses.get(b);
+    if (!kinds) continue;
+    let press = false;
+    if (kinds.has('spinner')) {
+      const off = me.actuators.some((a) => a.def.input.source === b && a.def.input.mode === 'toggle' && !a.toggled && a.child.joint);
+      press = off && !pressed.has(b);
+    } else {
+      press = attack;
     }
-    // Keep the spinner running: tap it back on whenever it's off.
-    if (me.spinners.some((s) => s.joint && !s.on)) out.weapon = true;
-    return out;
+    if (press) pressed.add(b); else pressed.delete(b);
+    out[FIELD[b]] = press;
   }
+  return out;
 }

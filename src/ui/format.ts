@@ -7,21 +7,15 @@ export function statLines(s: RobotStats, weightLimit = 100): Array<[string, stri
   const lines: Array<[string, string, boolean?]> = [
     ['Weight', `${n(s.mass, 1)} kg of ${weightLimit} kg`, s.mass > weightLimit],
     ['Cost', `£${n(s.cost)}`],
-    ['Top speed', `${n(s.topSpeed, 1)} m/s (${n(s.topSpeed * 2.237, 1)} mph)`],
-    ['Pushing force', `${n(s.pushForce)} N (${s.pushLimit}-limited)`],
-    ['0 to top speed', `${n(s.acceleration, 1)} s`],
-    ['Battery life', `${n(s.runtime / 60, 1)} min of fighting`],
+    ['Drive', s.locomotion, s.locomotion === 'none'],
   ];
+  if (s.topSpeed !== null) lines.push(['Top speed', `${n(s.topSpeed, 1)} m/s (${n(s.topSpeed * 2.237, 1)} mph)`]);
+  if (s.pushForce !== null) lines.push(['Pushing force', `${n(s.pushForce)} N (${s.pushLimit}-limited)`]);
+  if (s.acceleration !== null) lines.push(['0 to top speed', `${n(s.acceleration, 1)} s`]);
+  lines.push(['Battery life', Number.isFinite(s.runtime) ? `${n(s.runtime / 60, 1)} min of fighting` : 'no motors fitted', s.runtime === 0]);
   for (const w of s.weapons) {
-    if (w.kind === 'flipper') {
-      const f = w.numbers;
-      lines.push(['Flipper', `${n(f.ramForce / 1000, 1)} kN ram at ${f.pressure} bar · ${n(f.energyPerShot / 1000, 1)} kJ per flip`]);
-      lines.push(['Gas', `${f.shots} flips per bottle`]);
-    } else {
-      const sp = w.numbers;
-      lines.push(['Spinner', `${n(sp.maxRpm)} rpm · ${n(sp.tipSpeed)} m/s tip · ${n(sp.energy / 1000, 1)} kJ stored`]);
-      lines.push(['Spin-up', `${n(sp.spinUpTime, 1)} s to 90%`]);
-    }
+    lines.push([w.label, w.lines[0]]);
+    for (const extra of w.lines.slice(1)) lines.push(['', extra]);
   }
   if (!s.weapons.length) lines.push(['Weapon', 'None — a pusher']);
   const spares = { common: 'Off-the-shelf', specialist: 'Some specialist parts', custom: 'Custom-made parts' }[s.hardestSpare];

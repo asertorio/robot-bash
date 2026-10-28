@@ -5,7 +5,7 @@
 
 export const DRIVE_ACTIONS = ['forward', 'back', 'left', 'right'] as const;
 export const TANK_ACTIONS = ['leftForward', 'leftBack', 'rightForward', 'rightBack'] as const;
-export const WEAPON_ACTIONS = ['weapon', 'weapon2'] as const;
+export const WEAPON_ACTIONS = ['weapon', 'weapon2', 'weapon3', 'weapon4'] as const;
 export const ACTIONS = [...DRIVE_ACTIONS, ...TANK_ACTIONS, ...WEAPON_ACTIONS] as const;
 export type Action = (typeof ACTIONS)[number];
 
@@ -13,7 +13,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   forward: 'Forward', back: 'Reverse', left: 'Turn left', right: 'Turn right',
   leftForward: 'Left side forward', leftBack: 'Left side reverse',
   rightForward: 'Right side forward', rightBack: 'Right side reverse',
-  weapon: 'Weapon (fire / spin toggle)', weapon2: 'Weapon 2 (spinner brake)',
+  weapon: 'Weapon button 1', weapon2: 'Weapon button 2', weapon3: 'Weapon button 3', weapon4: 'Weapon button 4',
 };
 
 export type Binding =
@@ -62,6 +62,8 @@ export function defaultProfile(player: number): ControlProfile {
       rightBack: [key(keys.tank[3]), axis(pad, 3, 1)],
       weapon: [key(keys.w), ...extra.w, btn(pad, 0), btn(pad, 7)],
       weapon2: [key(keys.w2), ...extra.w2, btn(pad, 1), btn(pad, 6)],
+      weapon3: [key(player === 0 ? 'KeyZ' : 'KeyH'), btn(pad, 2), btn(pad, 5)],
+      weapon4: [key(player === 0 ? 'KeyX' : 'KeyN'), btn(pad, 3), btn(pad, 4)],
     },
     macros: [
       { name: 'Fire & back off', trigger: key(keys.m), script: 'weapon 150, back 450' },

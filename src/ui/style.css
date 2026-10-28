@@ -190,3 +190,16 @@ textarea.json { width: 100%; background: #0d0f13; color: var(--muted); border: 1
 
 .house-row { display: flex; align-items: center; gap: 12px; margin-top: 18px; flex-wrap: wrap; justify-content: center; font-family: var(--display); text-transform: uppercase; letter-spacing: 0.06em; }
 .house-row .hint { font-family: var(--body); text-transform: none; letter-spacing: 0; margin: 0; }
+
+/* Garage parts tree */
+.tree { max-height: 34vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; padding: 3px; background: rgba(0,0,0,0.2); }
+.tree-row { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; font-family: var(--body); font-size: 12px; text-transform: none; letter-spacing: 0; padding: 3px 8px; border: 0; border-radius: 3px; background: transparent; color: var(--text); }
+.tree-row:hover { background: rgba(255,255,255,0.06); }
+.tree-row.on { background: rgba(242,194,0,0.18); color: var(--hazard); }
+.tree-row .ticon { width: 14px; text-align: center; color: var(--muted); }
+.tree-row .tmeta { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.add-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; margin: 8px 0 4px; }
+.add-row .flabel { grid-column: 1 / -1; }
+.add-row select { min-width: 0; }
+.inspector { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 2px; }
+.inspector h4:first-child { color: var(--hazard); }

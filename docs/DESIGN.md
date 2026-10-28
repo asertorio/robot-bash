@@ -54,23 +54,54 @@ src/
 The **RobotDesign** JSON is the central contract. Templates, the builder, the
 campaign, save files and (later) AI-assisted design all produce RobotDesigns.
 
-## Robot model
+## Robot model (design format v2)
 
-A robot is a **chassis body** with parts attached:
+`src/sim/design.ts` defines a robot as a **tree of parts**. Each part has:
 
-| Part kind | Physical representation | Fails how |
-|---|---|---|
-| Shell panel (box / wedge) | Collider on the chassis, mass = surface area × thickness × density | Integrity drops with hits above its yield impulse; at zero it **detaches** as debris |
-| Wheel | Own rigid body on a revolute joint, driven by motor torque | Mount fails → wheel falls off |
-| Drive motor | Mass-only collider inside the chassis | Output torque falls with damage; destroyed → that side loses drive |
-| Battery | Mass-only collider | Damage causes intermittent cut-outs; destroyed → total power loss |
-| Flipper | Plate body on a hinge, driven by a pneumatic ram | Hinge damage weakens it; gas tank puncture leaks gas |
-| Spinner | Disc/bar body on a revolute joint, spun up by a weapon motor | Bearing damage adds drag; motor damage slows spin-up |
+- **What it is:**
+  - *structure*: a shape (box, wedge, cylinder, cone, sphere, capsule or
+    convex hull), a material, and either solid or a hollow shell with a wall
+    thickness;
+  - *wheel*: a catalogue wheel, whose axle is its hinge axis;
+  - *component*: a battery, gas bottle or ballast.
+- **Where it is:** position and rotation (Euler XYZ, in degrees) relative to
+  its parent, plus a shape offset from its joint.
+- **How it's attached:** *fixed*, *hinge* (axis, optional limits) or *slider*
+  (axis, travel limits).
+- **What drives it** (hinges and sliders only):
+  - a DC motor through a gearbox;
+  - a pneumatic ram (ram, valve, pressure, lever arm);
+  - a position servo (motor, gearbox, target positions for input −1, 0 and
+    +1).
+- **What it's wired to:** left or right drive, throttle, steer, buttons 1–4
+  (hold or toggle), or the gait clock (side, phase, swing or lift pattern).
 
-Internal parts can't be hit directly: when a shell panel takes a hit, a share
-of the impulse is transmitted to internal parts near the contact point. Thicker,
-tougher armour transmits less. Once a panel is gone, internals nearby are
-exposed and take the full share.
+**Physics build** (`src/sim/robot.ts`):
+
+- Each jointed part and everything fixed below it becomes one rigid body
+  with a compound collider. Masses come from the shape and material.
+- All bodies start aligned with the chassis, so each joint's axis is the same
+  in both bodies' frames.
+- Motors apply torque from the DC model, with an equal and opposite reaction
+  on the parent body, so spinners twist their own robot and FBS bases spin
+  against their shells.
+- Rams apply pressure × area (and × lever arm on a hinge). Flow-limited
+  valves cap the stroke speed.
+- Servos use Rapier's joint position motor, capped at the motor's real
+  torque.
+- Each actuator's mass sits on the parent body at the joint, as a damageable
+  internal part.
+
+**Failures:**
+
+- When a part on the end of a joint fails, the joint snaps and the whole
+  assembly beyond it comes off.
+- When a fixed part fails, just that part comes off as debris.
+- Batteries, gas bottles and actuators fail in place (power loss, a gas leak,
+  a dead motor).
+
+v1 designs (a single shell, two-sided drive and one weapon) still load:
+`src/sim/legacy.ts` converts them. The starter robots are written that way.
 
 ### Drive
 

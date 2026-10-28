@@ -29,6 +29,7 @@ class App {
   private picks = [1, 2];
   private roster: RobotDesign[] = TEMPLATES;
   private garage: Garage | null = null;
+  private pickHandler: ((id: string | null) => void) | null = null;
   private controllers: Controller[] = ['Human', 'CPU'];
   private houseCount = 2;
   private paused = false;
@@ -37,6 +38,14 @@ class App {
   private last = performance.now();
 
   start() {
+    // A click (not a drag) on the 3D view selects a part in the garage.
+    const canvas = document.getElementById('view')!;
+    let down = { x: 0, y: 0 };
+    canvas.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY }));
+    canvas.addEventListener('pointerup', (e) => {
+      if (!this.garage || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
+      this.pickHandler?.(this.view.pick(e.clientX, e.clientY));
+    });
     this.attract();
     this.mainMenu();
     requestAnimationFrame((t) => this.frame(t));
@@ -126,7 +135,9 @@ class App {
         this.view.followIndex = 0;
       },
       bay: () => this.match,
-      exit: () => { this.garage = null; this.attract(); this.mainMenu(); },
+      exit: () => { this.garage = null; this.view.highlight(null); this.attract(); this.mainMenu(); },
+      highlight: (id) => this.view.highlight(id),
+      onPick: (cb) => { this.pickHandler = cb; },
     }, initial);
     this.garage = garage;
     mount(this.ui, garage.el);
