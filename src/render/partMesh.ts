@@ -4,7 +4,7 @@ import { ConvexHull } from 'three/examples/jsm/math/ConvexHull.js';
 import { material as lookupMaterial } from '../data/materials';
 import { BATTERIES, WHEELS, lookup, type WheelSpec } from '../data/parts';
 import type { PartDef, Shape } from '../sim/design';
-import { planeMap, wedgePoints } from '../sim/shapes';
+import { armourPoints, planeMap, wedgePoints } from '../sim/shapes';
 import type { Part } from '../sim/robot';
 import { hardware, partMaterial, textTexture } from './surfaces';
 
@@ -123,6 +123,7 @@ function convexPointsOf(s: Shape): THREE.Vector3[] | null {
   }
   if (s.type === 'wedge') return wedgePoints(s.size, s.lip).map(V);
   if (s.type === 'hull') return s.points.map(V);
+  if (s.type === 'armour') return armourPoints(s).map(V);
   return null;
 }
 
@@ -223,7 +224,14 @@ function structureGeometry(s: Shape, chamfer: number): { geo: THREE.BufferGeomet
     case 'cone': return { geo: planarUV(new THREE.ConeGeometry(s.radius, s.length, 40)), faces: null };
     case 'capsule': return { geo: planarUV(new THREE.CapsuleGeometry(s.radius, s.length, 8, 24)), faces: null };
     case 'sphere': return { geo: planarUV(new THREE.SphereGeometry(s.radius, 40, 26)), faces: null };
-    case 'lathe': return { geo: planarUV(new THREE.LatheGeometry(s.profile.map(([r, y]) => new THREE.Vector2(Math.abs(r), y)), Math.max(8, s.segments ?? 40))), faces: null };
+    case 'lathe': {
+      // Profiles can be drawn either way round; the surface must face outwards.
+      let prof = s.profile.map(([r, y]) => new THREE.Vector2(Math.abs(r), y));
+      let area = 0;
+      for (let i = 0; i < prof.length; i++) { const a = prof[i], b = prof[(i + 1) % prof.length]; area += a.x * b.y - b.x * a.y; }
+      if (area < 0) prof = prof.reverse();
+      return { geo: planarUV(new THREE.LatheGeometry(prof, Math.max(8, s.segments ?? 40))), faces: null };
+    }
     case 'mesh': {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(s.vertices, 3));
@@ -474,13 +482,13 @@ function buildBattery(def: PartDef, size: number[]): PartMesh {
     const term = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.014, 12), m);
     term.position.set(x, sy / 2 + 0.007, -sz * 0.32);
     group.add(term);
-    const lead = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, sz * 0.4, 8), m);
+    const lead = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, sz * 0.25, 8), m);
     lead.rotation.x = Math.PI / 2;
-    lead.position.set(x * 0.6, sy / 2 + 0.012, -sz * 0.5);
+    lead.position.set(x * 0.6, sy / 2 + 0.012, -sz * 0.2);
     group.add(lead);
   }
   const plug = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.016, 0.024), hardware(0xb81d1d, 0, 0.45));
-  plug.position.set(0, sy / 2 + 0.012, -sz * 0.72);
+  plug.position.set(0, sy / 2 + 0.012, -sz * 0.05);
   group.add(plug);
   return { mesh: group, mats };
 }

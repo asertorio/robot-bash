@@ -2,7 +2,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { material } from '../data/materials';
 import { BATTERIES, GEARBOX, MOTORS, RAMS, TANKS, VALVES, WHEELS, lookup, type MotorSpec, type RamSpec } from '../data/parts';
 import { actuatorMass, faceArea, partFrames, partMass, registerCatalog, resolveShape, root, shapeHalf, solidThickness, unit } from './assembly';
-import { convexPieces, shapeVolume, type Piece } from './shapes';
+import { convexPieces, hullMetrics, shapeVolume, type Piece } from './shapes';
 import type { ControlState } from './control';
 import { COMPONENT_TOUGHNESS, DAMAGE, HEAT, WHEEL_TOUGHNESS, damageFor, plateToughness, transmission, type Toughness } from './damage';
 import type { ActuatorDef, InputDef, PartDef, RobotDesign, Shape } from './design';
@@ -773,9 +773,7 @@ function pieceCollider(p: Piece): { desc: RAPIER.ColliderDesc; offset: V3 } {
 function pieceVolume(p: Piece): number {
   if (p.kind === 'box') return 8 * p.half[0] * p.half[1] * p.half[2];
   if (p.kind === 'prim') return shapeVolume(p.shape);
-  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
-  for (const q of p.points) for (let i = 0; i < 3; i++) { min[i] = Math.min(min[i], q[i]); max[i] = Math.max(max[i], q[i]); }
-  return Math.max(1e-9, (max[0] - min[0]) * (max[1] - min[1]) * (max[2] - min[2]) * 0.6);
+  return Math.max(1e-9, hullMetrics(p.points).volume);
 }
 
 const hex = (c: string): number => parseInt(c.slice(1), 16);

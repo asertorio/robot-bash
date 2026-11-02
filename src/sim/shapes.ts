@@ -26,6 +26,7 @@ export function convexPieces(s: Shape): Piece[] {
   if (s.type === 'box' || s.type === 'cylinder' || s.type === 'cone' || s.type === 'sphere' || s.type === 'capsule') return [{ kind: 'prim', shape: s }];
   if (s.type === 'wedge') return [{ kind: 'hull', points: wedgePoints(s.size, s.lip) }];
   if (s.type === 'hull') return [{ kind: 'hull', points: s.points }];
+  if (s.type === 'armour') return [{ kind: 'hull', points: armourPoints(s) }];
   const key = JSON.stringify(s);
   let hit = cache.get(key);
   if (!hit) {
@@ -42,6 +43,79 @@ export function wedgePoints(size: Vec3, lipH: number): Vec3[] {
   const lip = Math.min(lipH, h);
   const out: Vec3[] = [[-x, -y, -z], [x, -y, -z], [-x, y, -z], [x, y, -z], [-x, -y, z], [x, -y, z]];
   if (lip > 0.001) out.push([-x, -y + lip, z], [x, -y + lip, z]);
+  return out;
+}
+
+/** Corner points of an armour shell (see the Shape type). */
+export function armourPoints(s: Extract<Shape, { type: 'armour' }>): Vec3[] {
+  const [w, h, l] = s.size.map((v) => v / 2);
+  const cap = (v: number, max: number) => Math.min(Math.max(0, v), max);
+  const sides = cap(s.sides, w * 0.95), front = cap(s.front, l * 0.95), rear = cap(s.rear, l * 0.95);
+  const beltY = -h + 2 * h * cap(s.belt, 1);
+  const out: Vec3[] = [];
+  for (const x of [-w, w]) for (const z of [-l, l]) out.push([x, -h, z], [x, beltY, z]);
+  for (const x of [-(w - sides), w - sides]) out.push([x, h, l - front], [x, h, -l + Math.min(rear, 2 * l - front - 0.001)]);
+  return out;
+}
+
+const metricsCache = new Map<string, { volume: number; area: number }>();
+
+/**
+ * Exact volume and surface area of the convex hull of some points. Finds
+ * the hull's face planes directly (fine for the few dozen points a part has).
+ */
+export function hullMetrics(points: Vec3[]): { volume: number; area: number } {
+  const key = points.map((p) => p.join(',')).join(';');
+  const hit = metricsCache.get(key);
+  if (hit) return hit;
+  const pts: Vec3[] = [];
+  for (const p of points) if (!pts.some((q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) < 1e-9)) pts.push(p);
+  const n = pts.length;
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  for (const q of pts) for (let i = 0; i < 3; i++) { min[i] = Math.min(min[i], q[i]); max[i] = Math.max(max[i], q[i]); }
+  const box = { volume: (max[0] - min[0]) * (max[1] - min[1]) * (max[2] - min[2]) * 0.6, area: 2 * ((max[0] - min[0]) * (max[1] - min[1]) + (max[0] - min[0]) * (max[2] - min[2]) + (max[1] - min[1]) * (max[2] - min[2])) * 0.8 };
+  if (n < 4 || n > 80) return box;
+  const eps = 1e-7 * (1 + Math.max(max[0] - min[0], max[1] - min[1], max[2] - min[2]));
+  const c = pts.reduce((a, p) => [a[0] + p[0] / n, a[1] + p[1] / n, a[2] + p[2] / n], [0, 0, 0]);
+  const planes: Array<{ n: Vec3; d: number }> = [];
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) for (let k = j + 1; k < n; k++) {
+    const a = pts[i], b = pts[j], q = pts[k];
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], v = [q[0] - a[0], q[1] - a[1], q[2] - a[2]];
+    let nx = u[1] * v[2] - u[2] * v[1], ny = u[2] * v[0] - u[0] * v[2], nz = u[0] * v[1] - u[1] * v[0];
+    const len = Math.hypot(nx, ny, nz);
+    if (len < 1e-14) continue;
+    nx /= len; ny /= len; nz /= len;
+    let d = nx * a[0] + ny * a[1] + nz * a[2];
+    let pos = false, neg = false;
+    for (const p of pts) {
+      const s = nx * p[0] + ny * p[1] + nz * p[2] - d;
+      if (s > eps) pos = true; else if (s < -eps) neg = true;
+      if (pos && neg) break;
+    }
+    if ((pos && neg) || (!pos && !neg)) continue;
+    if (pos) { nx = -nx; ny = -ny; nz = -nz; d = -d; }
+    if (planes.some((p) => p.n[0] * nx + p.n[1] * ny + p.n[2] * nz > 1 - 1e-9 && Math.abs(p.d - d) < eps)) continue;
+    planes.push({ n: [nx, ny, nz], d });
+  }
+  if (planes.length < 4) return box;
+  let volume = 0, area = 0;
+  for (const { n: nv, d } of planes) {
+    const face = pts.filter((p) => Math.abs(nv[0] * p[0] + nv[1] * p[1] + nv[2] * p[2] - d) < eps * 10);
+    const fc = face.reduce((a, p) => [a[0] + p[0] / face.length, a[1] + p[1] / face.length, a[2] + p[2] / face.length], [0, 0, 0]);
+    // In-plane basis to order the face's corners by angle.
+    const t1 = (() => { const r = [face[0][0] - fc[0], face[0][1] - fc[1], face[0][2] - fc[2]]; const l = Math.hypot(r[0], r[1], r[2]) || 1; return [r[0] / l, r[1] / l, r[2] / l]; })();
+    const t2 = [nv[1] * t1[2] - nv[2] * t1[1], nv[2] * t1[0] - nv[0] * t1[2], nv[0] * t1[1] - nv[1] * t1[0]];
+    const flat = face.map((p) => { const r = [p[0] - fc[0], p[1] - fc[1], p[2] - fc[2]]; return [r[0] * t1[0] + r[1] * t1[1] + r[2] * t1[2], r[0] * t2[0] + r[1] * t2[1] + r[2] * t2[2]]; })
+      .sort((a, b) => Math.atan2(a[1], a[0]) - Math.atan2(b[1], b[0]));
+    let A = 0;
+    for (let i = 0; i < flat.length; i++) { const p = flat[i], q = flat[(i + 1) % flat.length]; A += p[0] * q[1] - q[0] * p[1]; }
+    A = Math.abs(A) / 2;
+    area += A;
+    volume += (A * (d - (nv[0] * c[0] + nv[1] * c[1] + nv[2] * c[2]))) / 3;
+  }
+  const out = volume > 0 ? { volume, area } : box;
+  if (metricsCache.size > 500) metricsCache.clear();
+  metricsCache.set(key, out);
   return out;
 }
 
@@ -277,7 +351,8 @@ export function shapeVolume(s: Shape): number {
       if (Math.abs(v) > 1e-9) return Math.abs(v);
       return convexPieces(s).reduce((sum, p) => sum + (p.kind === 'box' ? 8 * p.half[0] * p.half[1] * p.half[2] : 0), 0);
     }
-    case 'hull': { const h = shapeHalf(s); return 8 * h.x * h.y * h.z * 0.6; }
+    case 'hull': return hullMetrics(s.points).volume;
+    case 'armour': return hullMetrics(armourPoints(s)).volume;
   }
 }
 
@@ -315,7 +390,8 @@ export function shapeArea(s: Shape): number {
       }
       return a;
     }
-    case 'hull': { const h = shapeHalf(s); return 8 * (h.x * h.y + h.x * h.z + h.y * h.z) * 0.8; }
+    case 'hull': return hullMetrics(s.points).area;
+    case 'armour': return hullMetrics(armourPoints(s)).area;
   }
 }
 
@@ -345,7 +421,7 @@ export function shapeInertia(s: Shape, mass: number, hollow: boolean): V3 {
       return scale({ x: mass * (0.15 * r * r + 0.0375 * h * h), y: 0.3 * mass * r * r, z: mass * (0.15 * r * r + 0.0375 * h * h) }, k);
     }
     case 'sphere': return scale({ x: 0.4 * mass * s.radius ** 2, y: 0.4 * mass * s.radius ** 2, z: 0.4 * mass * s.radius ** 2 }, k);
-    case 'box': case 'wedge': case 'hull': {
+    case 'box': case 'wedge': case 'hull': case 'armour': {
       const h = shapeHalf(s), x = 2 * h.x, y = 2 * h.y, z = 2 * h.z;
       return scale({ x: (mass * (y * y + z * z)) / 12, y: (mass * (x * x + z * z)) / 12, z: (mass * (x * x + y * y)) / 12 }, k);
     }

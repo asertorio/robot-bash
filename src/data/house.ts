@@ -1,5 +1,6 @@
 import type { RobotDesign } from '../sim/design';
 import { fromV1 } from '../sim/legacy';
+import { armour, bevelledPlate, bladeBar, cheekWedge, reshape } from './shaping';
 
 /**
  * House robots: the arena's resident heavies. Original designs in the spirit
@@ -7,7 +8,7 @@ import { fromV1 } from '../sim/legacy';
  * to their corner patrol zones unless a robot has been counted out.
  */
 
-export const IRONJAW: RobotDesign = fromV1({
+export const IRONJAW: RobotDesign = reshape(fromV1({
   schema: 1,
   id: 'house-ironjaw',
   name: 'Ironjaw',
@@ -34,9 +35,13 @@ export const IRONJAW: RobotDesign = fromV1({
     plate: { width: 0.7, length: 0.62, thickness: 12, material: 'hardox' },
     leverArm: 0.18, maxAngle: 65, gasPosition: [0, 0.14, 0.1],
   }],
+}), {
+  body: { shape: armour([0.78, 0.32, 0.9], { sides: 0.08, rear: 0.16, belt: 0.5 }) },
+  rear: { shape: armour([0.4, 0.18, 0.2], { sides: 0.04, front: 0.05, rear: 0.05, belt: 0.2 }) },
+  'flipper-0': { shape: bevelledPlate([0.7, 0.012, 0.62], { bevel: 0.08, corner: 0.08 }) },
 });
 
-export const BUZZARD: RobotDesign = fromV1({
+export const BUZZARD: RobotDesign = reshape(fromV1({
   schema: 1,
   id: 'house-buzzard',
   name: 'Buzzard',
@@ -62,9 +67,13 @@ export const BUZZARD: RobotDesign = fromV1({
     blade: { shape: 'disc', length: 0.52, width: 0.52, thickness: 12, material: 'hardox' },
     position: [0, 0.29, 0.6], motorPosition: [0, 0.16, 0.15],
   }],
+}), {
+  body: { shape: armour([0.7, 0.3, 0.8], { sides: 0.07, front: 0.12, rear: 0.1, belt: 0.5 }) },
+  // Tapered side-plate carrying the saw out front.
+  arms: { shape: { type: 'extrude', plane: 'side', depth: 0.08, outline: [[-0.15, -0.06], [0.15, -0.025], [0.15, 0.035], [-0.15, 0.06]] } },
 });
 
-export const SHOVELHEAD: RobotDesign = fromV1({
+export const SHOVELHEAD: RobotDesign = reshape(fromV1({
   schema: 1,
   id: 'house-shovelhead',
   name: 'Shovelhead',
@@ -86,9 +95,12 @@ export const SHOVELHEAD: RobotDesign = fromV1({
   },
   battery: { part: 'nicd36l', position: [0, 0.14, -0.35] },
   weapons: [],
+}), {
+  body: { shape: armour([0.7, 0.34, 0.75], { sides: 0.08, rear: 0.15, belt: 0.5 }) },
+  scoop: { shape: cheekWedge([1.0, 0.34, 0.42], { topWidth: 0.54, shoulder: 0.2, lip: 0.01, nose: 0.05 }) },
 });
 
-export const THRESHER: RobotDesign = fromV1({
+export const THRESHER: RobotDesign = reshape(fromV1({
   schema: 1,
   id: 'house-thresher',
   name: 'Thresher',
@@ -114,6 +126,10 @@ export const THRESHER: RobotDesign = fromV1({
     blade: { shape: 'bar', length: 1.1, width: 0.08, thickness: 15, material: 'mildSteel' },
     position: [0, 0.54, 0], motorPosition: [0, 0.16, 0],
   }],
+}), {
+  body: { shape: armour([0.72, 0.3, 0.78], { sides: 0.08, front: 0.1, rear: 0.1, belt: 0.5 }) },
+  tower: { shape: armour([0.24, 0.16, 0.24], { sides: 0.035, front: 0.035, rear: 0.035, belt: 0 }) },
+  'spinner-0': { shape: bladeBar(1.1, 0.08, 0.015) },
 });
 
 export const HOUSE_ROBOTS: RobotDesign[] = [IRONJAW, BUZZARD, SHOVELHEAD, THRESHER];

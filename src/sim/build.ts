@@ -21,14 +21,14 @@ export function newId(d: RobotDesign, base: string): string {
 }
 
 export type NewPartKind =
-  | 'box' | 'wedge' | 'cylinder' | 'cone' | 'sphere' | 'capsule' | 'plate' | 'bar'
+  | 'box' | 'armour' | 'wedge' | 'cylinder' | 'cone' | 'sphere' | 'capsule' | 'plate' | 'bar'
   | 'wheel' | 'battery' | 'gasTank' | 'ballast'
   | 'flipper' | 'spinner' | 'lifter' | 'axe' | 'spike' | 'leg'
   | 'outline' | 'lathe' | 'model' | 'flail' | 'flamethrower' | 'suspensionWheel' | 'crusher';
 
 export const NEW_PART_KINDS: Array<[NewPartKind, string, string]> = [
   ['outline', 'Drawn outline — any 2D shape, extruded', 'Shapes'], ['lathe', 'Drawn profile — spun into a drum, dome…', 'Shapes'], ['model', 'Imported 3D model (STL / OBJ)', 'Shapes'],
-  ['box', 'Box', 'Shapes'], ['wedge', 'Wedge', 'Shapes'], ['plate', 'Flat plate', 'Shapes'], ['bar', 'Bar / beam', 'Shapes'],
+  ['armour', 'Armour shell (sloped)', 'Shapes'], ['box', 'Box', 'Shapes'], ['wedge', 'Wedge', 'Shapes'], ['plate', 'Flat plate', 'Shapes'], ['bar', 'Bar / beam', 'Shapes'],
   ['cylinder', 'Cylinder / disc', 'Shapes'], ['cone', 'Cone', 'Shapes'], ['sphere', 'Sphere', 'Shapes'], ['capsule', 'Capsule / rod', 'Shapes'],
   ['wheel', 'Driven wheel', 'Drive'], ['suspensionWheel', 'Driven wheel on sprung suspension', 'Drive'], ['leg', 'Walking leg (hip + knee servos)', 'Drive'],
   ['flipper', 'Flipper (ram on a hinge)', 'Weapons'], ['lifter', 'Lifter (slow ram)', 'Weapons'], ['axe', 'Axe / hammer (ram)', 'Weapons'],
@@ -72,6 +72,7 @@ export function newParts(d: RobotDesign, kind: NewPartKind, parentId = root(d).i
   };
   switch (kind) {
     case 'box': return [shapePart(d, parentId, 'Armour box', { type: 'box', size: [0.3, 0.12, 0.2] }, at.front, { wall: 5 })];
+    case 'armour': return [shapePart(d, parentId, 'Armour shell', { type: 'armour', size: [0.3, 0.12, 0.2], sides: 0.03, front: 0.03, rear: 0.03, belt: 0.5 }, at.top, { wall: 5 })];
     case 'wedge': return [shapePart(d, parentId, 'Wedge', { type: 'wedge', size: [0.5, 0.15, 0.3], lip: 0.01 }, [at.front[0], at.front[1], round(at.front[2] + 0.15)], { wall: 5 })];
     case 'plate': return [shapePart(d, parentId, 'Plate', { type: 'box', size: [0.4, 0.008, 0.3] }, at.top)];
     case 'bar': return [shapePart(d, parentId, 'Bar', { type: 'box', size: [0.04, 0.04, 0.4] }, at.top, { material: 'mildSteel' })];

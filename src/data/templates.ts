@@ -1,5 +1,6 @@
 import type { RobotDesign } from '../sim/design';
 import { fromV1 } from '../sim/legacy';
+import { armour, bevelledPlate, bladeBar, cheekWedge, reshape, taperedTongue } from './shaping';
 import { EXAMPLES } from './examples';
 
 /**
@@ -7,7 +8,7 @@ import { EXAMPLES } from './examples';
  * (~100 kg class), built entirely from catalogue parts.
  */
 
-export const WEDGEHOG: RobotDesign = fromV1({
+export const WEDGEHOG: RobotDesign = reshape(fromV1({
   schema: 1,
   id: 'wedgehog',
   name: 'Wedgehog',
@@ -33,9 +34,14 @@ export const WEDGEHOG: RobotDesign = fromV1({
   },
   battery: { part: 'nicd24', position: [0, 0.1, -0.2] },
   weapons: [],
+}), {
+  // Raked rear deck and sloped sides; the hardened wedge has cheek plates over the front wheels.
+  body: { shape: armour([0.5, 0.22, 0.6], { sides: 0.05, rear: 0.12, belt: 0.45 }), wall: 8 }, // weight saved by the sloped shell goes back into thicker plate
+  wedge: { shape: cheekWedge([0.74, 0.22, 0.38], { topWidth: 0.4, shoulder: 0.12, lip: 0.01, nose: 0.03 }) },
+  rear: { shape: armour([0.74, 0.12, 0.06], { rear: 0.03, belt: 0.3 }) },
 });
 
-export const FLIPSIDE: RobotDesign = fromV1({
+export const FLIPSIDE: RobotDesign = reshape(fromV1({
   schema: 1,
   id: 'flipside',
   name: 'Flipside',
@@ -74,9 +80,17 @@ export const FLIPSIDE: RobotDesign = fromV1({
       gasPosition: [0, 0.12, 0.12],
     },
   ],
+}), {
+  body: { shape: armour([0.55, 0.2, 0.75], { sides: 0.06, belt: 0.45 }) },
+  // Slopes down to the back (so it's a wedge facing backwards, not a step).
+  rear: { shape: { type: 'hull', points: [
+    [-0.275, -0.1, 0.09], [0.275, -0.1, 0.09], [-0.275, -0.01, 0.09], [0.275, -0.01, 0.09], [-0.215, 0.1, 0.09], [0.215, 0.1, 0.09],
+    [-0.275, -0.1, -0.09], [0.275, -0.1, -0.09], [-0.275, -0.08, -0.09], [0.275, -0.08, -0.09],
+  ] } },
+  'flipper-0': { shape: bevelledPlate([0.62, 0.008, 0.44]) },
 });
 
-export const WHIRLWIND: RobotDesign = fromV1({
+export const WHIRLWIND: RobotDesign = reshape(fromV1({
   schema: 1,
   id: 'whirlwind',
   name: 'Whirlwind',
@@ -112,6 +126,10 @@ export const WHIRLWIND: RobotDesign = fromV1({
       motorPosition: [0, 0.1, -0.1],
     },
   ],
+}), {
+  body: { shape: armour([0.6, 0.16, 0.56], { sides: 0.06, front: 0.1, rear: 0.06, belt: 0.35 }), wall: 10 },
+  forks: { shape: taperedTongue(0.24, 0.16, 0.34, 0.042) },
+  'spinner-0': { shape: bladeBar(0.62, 0.1, 0.025) },
 });
 
 export const TEMPLATES: RobotDesign[] = [WEDGEHOG, FLIPSIDE, WHIRLWIND, ...EXAMPLES];

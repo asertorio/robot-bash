@@ -1,4 +1,5 @@
 import type { InputDef, PartDef, RobotDesign, Vec3 } from '../sim/design';
+import { armour } from './shaping';
 
 /**
  * Example builds written directly as part trees, to show the range: twin
@@ -15,7 +16,7 @@ export const TWIN_TERROR: RobotDesign = {
   description: 'Two independent flippers side by side: button 1 fires the left, button 2 the right, both together for a full-width launch.',
   colour: '#e67e22',
   parts: [
-    { id: 'chassis', label: 'Chassis', parent: null, position: [0, 0.13, 0], rotation: zero, joint: fixed, role: 'structure', shape: { type: 'box', size: [0.62, 0.18, 0.7] }, material: 'aluminium', wall: 6 },
+    { id: 'chassis', label: 'Chassis', parent: null, position: [0, 0.13, 0], rotation: zero, joint: fixed, role: 'structure', shape: armour([0.62, 0.18, 0.7], { sides: 0.05, rear: 0.12, belt: 0.4 }), material: 'aluminium', wall: 6 },
     ...(['left', 'right'] as const).flatMap((side, i): PartDef[] => {
       const x = side === 'left' ? 0.155 : -0.155;
       return [
@@ -95,7 +96,10 @@ export const ARACHNID: RobotDesign = {
   description: 'Six-legged walker on twelve servos with a tripod gait. Slow, unsettling, and very hard to get a wedge under.',
   colour: '#6c3483',
   parts: [
-    { id: 'body', label: 'Body', parent: null, position: [0, 0.29, 0], rotation: zero, joint: fixed, role: 'structure', shape: { type: 'box', size: [0.38, 0.1, 0.56] }, material: 'aluminium', wall: 4 },
+    { id: 'body', label: 'Body', parent: null, position: [0, 0.29, 0], rotation: zero, joint: fixed, role: 'structure', shape: { type: 'hull', points: [
+      [0.19, -0.05, 0.22], [-0.19, -0.05, 0.22], [0.19, -0.05, -0.22], [-0.19, -0.05, -0.22], [0.11, -0.05, 0.28], [-0.11, -0.05, 0.28], [0.11, -0.05, -0.28], [-0.11, -0.05, -0.28],
+      [0.15, 0.05, 0.19], [-0.15, 0.05, 0.19], [0.15, 0.05, -0.19], [-0.15, 0.05, -0.19], [0.08, 0.05, 0.25], [-0.08, 0.05, 0.25], [0.08, 0.05, -0.25], [-0.08, 0.05, -0.25],
+    ] }, material: 'aluminium', wall: 4 },
     { id: 'battery-a', label: 'Battery A', parent: 'body', position: [0, 0, 0.1], rotation: zero, joint: fixed, role: 'component', component: { type: 'battery', part: 'nicd12' } },
     { id: 'battery-b', label: 'Battery B', parent: 'body', position: [0, 0, -0.1], rotation: zero, joint: fixed, role: 'component', component: { type: 'battery', part: 'nicd12' } },
     { id: 'battery-c', label: 'Battery C', parent: 'body', position: [0.1, 0, 0], rotation: zero, joint: fixed, role: 'component', component: { type: 'battery', part: 'nicd12' } },
@@ -114,7 +118,7 @@ export const GYRODISC: RobotDesign = {
   description: 'Full-body spinner: a 1 m aluminium shell with steel teeth spinning around the drive base. Takes ages to spin up; then everything bounces off.',
   colour: '#c0392b',
   parts: [
-    { id: 'base', label: 'Drive base', parent: null, position: [0, 0.1, 0], rotation: zero, joint: fixed, role: 'structure', shape: { type: 'box', size: [0.36, 0.1, 0.36] }, material: 'aluminium', wall: 5 },
+    { id: 'base', label: 'Drive base', parent: null, position: [0, 0.1, 0], rotation: zero, joint: fixed, role: 'structure', shape: armour([0.36, 0.1, 0.36], { sides: 0.03, front: 0.03, rear: 0.03, belt: 0.4 }), material: 'aluminium', wall: 5 },
     { id: 'battery', label: 'Battery', parent: 'base', position: [0, 0, -0.08], rotation: zero, joint: fixed, role: 'component', component: { type: 'battery', part: 'nicd36l' } },
     ...(['left', 'right'] as const).map((side): PartDef => ({
       id: `wheel-${side}`, label: `${side === 'left' ? 'Left' : 'Right'} wheel`, parent: 'base', position: [side === 'left' ? 0.22 : -0.22, 0, 0], rotation: zero, role: 'wheel', wheel: 'solid200',
@@ -124,7 +128,7 @@ export const GYRODISC: RobotDesign = {
     { id: 'skid-r', label: 'Rear skid', parent: 'base', position: [0, -0.064, -0.15], rotation: zero, joint: fixed, role: 'structure', shape: { type: 'sphere', radius: 0.03 }, material: 'ptfe' },
     {
       id: 'shell', label: 'Spinning shell', parent: 'base', position: [0, 0.03, 0], rotation: zero, role: 'structure',
-      shape: { type: 'cylinder', radius: 0.5, length: 0.15 }, material: 'aluminium', wall: 5,
+      shape: { type: 'lathe', segments: 48, profile: [[0, 0.075], [0.26, 0.07], [0.46, 0.032], [0.5, 0.012], [0.5, -0.02], [0.46, -0.05], [0.3, -0.075], [0, -0.075]] }, material: 'aluminium', wall: 6,
       joint: { type: 'hinge', axis: [0, 1, 0], actuator: { type: 'motor', motor: 'wm2000', gear: 6, input: { source: 'button1', mode: 'toggle' } } },
     },
     { id: 'tooth-a', label: 'Tooth A', parent: 'shell', position: [0.5, 0, 0], rotation: zero, joint: fixed, role: 'structure', shape: { type: 'box', size: [0.06, 0.08, 0.05] }, material: 'hardox' },

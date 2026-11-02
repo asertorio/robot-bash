@@ -32,6 +32,13 @@ export type Shape =
   | { type: 'sphere'; radius: number }
   /** Straight section `length` long along Y, rounded ends. */
   | { type: 'capsule'; radius: number; length: number }
+  /**
+   * Armour shell: a box whose upper edges are cut back, like real sloped
+   * armour. Sides rise vertically to `belt` (0 = floor, 1 = top) of the
+   * height, then slope in by `sides` (each side); the top front and rear
+   * edges are set back by `front` and `rear`. All in metres.
+   */
+  | { type: 'armour'; size: Vec3; sides: number; front: number; rear: number; belt: number }
   /** Convex hull of arbitrary points. */
   | { type: 'hull'; points: Vec3[] }
   /**

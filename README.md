@@ -10,6 +10,8 @@ lifters, clampers…
     teeth, stars…) and extrude it.
   - Draw a profile and spin it into a drum, dome, bell or disc.
   - Import any **STL or OBJ** model.
+  - Use an **armour shell**: a box with sloped sides and raked front and
+    back, set with sliders, like most real robots' bodywork.
   - Or use the primitives: box, wedge, plate, bar, cylinder, cone, sphere,
     capsule and convex hull.
 

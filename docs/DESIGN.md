@@ -105,6 +105,10 @@ pieces, so every shape is reduced to convex pieces, and mass, inertia and
 collisions all come from those same pieces.
 
 - Primitives are one piece each.
+- Armour shells (a box with sloped sides and raked front/rear edges above a
+  belt line), wedges and hulls are one convex hull each. Hull volume and
+  surface area are exact, from the hull's face planes, so sloped plate
+  weighs what it should.
 - Extruded outlines are triangulated (ear clipping), then merged back into
   as few convex polygons as possible (Hertel–Mehlhorn), and each is
   extruded into a prism.
@@ -148,7 +152,9 @@ What remains a limit is physics: parts are rigid (nothing bends, cuts or
 deforms), and a robot's own parts don't collide with each other.
 
 v1 designs (a single shell, two-sided drive and one weapon) still load:
-`src/sim/legacy.ts` converts them. The starter robots are written that way.
+`src/sim/legacy.ts` converts them. The starter and house robots are written
+that way, then given real shapes (sloped armour, cheek-plated wedges,
+bevelled flipper plates, profiled blades) with `src/data/shaping.ts`.
 
 ### Drive
 

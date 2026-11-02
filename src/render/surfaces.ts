@@ -193,8 +193,8 @@ export interface Finish {
 export function bareFinish(materialId: string | undefined): Finish {
   switch (materialId ?? 'aluminium') {
     case 'aluminium': return { colour: 0xc6cacf, metalness: 1, roughness: 0.34, rough: 'brushed', bare: 0xe2e5e8 };
-    case 'mildSteel': return { colour: 0x6c7074, metalness: 0.9, roughness: 0.55, rough: 'scuff', bare: 0xa4a8ac };
-    case 'hardox': return { colour: 0x50545a, metalness: 0.9, roughness: 0.48, rough: 'brushed', bare: 0x9da2a8 };
+    case 'mildSteel': return { colour: 0x686d73, metalness: 0.85, roughness: 0.58, rough: 'scuff', bare: 0xa4a8ac };
+    case 'hardox': return { colour: 0x4a5058, metalness: 0.85, roughness: 0.5, rough: 'scuff', bare: 0xa8adb3 };
     case 'titanium': return { colour: 0x9b958b, metalness: 1, roughness: 0.4, rough: 'brushed', bare: 0xc8c2b6 };
     case 'hdpe': return { colour: 0xe6e5dd, metalness: 0, roughness: 0.72, rough: 'scuff', bare: 0xf4f3ec };
     case 'polycarbonate': return { colour: 0xd8e8ee, metalness: 0, roughness: 0.08, rough: 'scuff', bare: 0xffffff, clear: true };
@@ -227,7 +227,7 @@ export function partMaterial(materialId: string | undefined, paint: number | nul
     colour: paint,
     // Paint is a dielectric skin; a little clearcoat gives it the sheen of fresh enamel.
     metalness: 0,
-    roughness: bare.clear ? 0.08 : 0.5,
+    roughness: bare.clear ? 0.08 : 0.6,
     rough: 'scuff',
     bare: metalUnder ? bare.colour : bare.bare,
     clear: bare.clear,
@@ -235,7 +235,7 @@ export function partMaterial(materialId: string | undefined, paint: number | nul
   const mat = new THREE.MeshPhysicalMaterial({
     color: f.colour,
     metalness: f.metalness,
-    roughness: Math.min(1, f.roughness * 2.2),
+    roughness: f.roughness / 0.42,
     roughnessMap: f.rough === 'brushed' ? tex.brushed : tex.scuff,
     map: f.wood ? tex.grain : null,
     clearcoat: paint !== null && !f.clear ? 0.12 : 0,
@@ -260,7 +260,7 @@ export function partMaterial(materialId: string | undefined, paint: number | nul
 export function hardware(colour: number, metalness: number, roughness: number, opts: { rough?: 'brushed' | 'scuff'; clearcoat?: number } = {}): THREE.MeshPhysicalMaterial {
   const tex = textures();
   const mat = new THREE.MeshPhysicalMaterial({
-    color: colour, metalness, roughness: Math.min(1, roughness * 2.2),
+    color: colour, metalness, roughness: roughness / 0.42,
     roughnessMap: opts.rough === 'brushed' ? tex.brushed : tex.scuff,
     clearcoat: opts.clearcoat ?? 0, clearcoatRoughness: 0.3,
   });

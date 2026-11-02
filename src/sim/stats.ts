@@ -55,9 +55,10 @@ export function billOfMaterials(d: RobotDesign): BomLine[] {
       // Fabrication: plate and simple shapes are cheap; curved and freeform parts cost more and can't be bought.
       const shape = p.shape!.type;
       const freeform = shape === 'hull' || shape === 'extrude' || shape === 'lathe' || shape === 'mesh';
-      const fab = shape === 'box' || shape === 'wedge' ? 60 : shape === 'extrude' ? 120 : freeform ? 260 : 140;
+      const fab = shape === 'box' || shape === 'wedge' ? 60 : shape === 'armour' ? 90 : shape === 'extrude' ? 120 : freeform ? 260 : 140;
       // Profile-cut plate (extrusions) can be ordered; turned, cast and printed parts are one-offs.
-      const sourcing: Sourcing = shape === 'box' || shape === 'wedge' ? m.sourcing : shape === 'extrude' ? worst(m.sourcing, 'specialist') : freeform ? 'custom' : m.sourcing === 'common' ? 'specialist' : 'custom';
+      // Armour shells are cut, bent and welded plate: any fabricator can make one.
+      const sourcing: Sourcing = shape === 'box' || shape === 'wedge' || shape === 'armour' ? m.sourcing : shape === 'extrude' ? worst(m.sourcing, 'specialist') : freeform ? 'custom' : m.sourcing === 'common' ? 'specialist' : 'custom';
       const what = p.wall ? `${p.wall}mm ${m.name} ${shape}` : `solid ${m.name} ${shape}`;
       lines.push({ label: `${p.label} (${what})`, mass, cost: mass * m.costPerKg + fab, sourcing, swapMinutes: 25 });
     }

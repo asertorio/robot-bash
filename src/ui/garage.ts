@@ -304,7 +304,7 @@ export class Garage {
   private shapeFields(p: PartDef): HTMLElement[] {
     const s = p.shape!;
     const types: Array<[Shape['type'], string]> = [
-      ['box', 'Box'], ['wedge', 'Wedge'], ['cylinder', 'Cylinder / disc'], ['cone', 'Cone'], ['sphere', 'Sphere'], ['capsule', 'Capsule / rod'],
+      ['box', 'Box'], ['armour', 'Armour shell — sloped sides, raked front/back'], ['wedge', 'Wedge'], ['cylinder', 'Cylinder / disc'], ['cone', 'Cone'], ['sphere', 'Sphere'], ['capsule', 'Capsule / rod'],
       ['extrude', 'Drawn outline (extruded) — any 2D shape'], ['lathe', 'Drawn profile (spun) — drums, domes, bells'],
       ['mesh', 'Imported 3D model (STL / OBJ)'], ['hull', 'Convex hull of points'],
     ];
@@ -314,6 +314,12 @@ export class Garage {
       case 'box': case 'wedge':
         out.push(this.mm('Width (X)', s.size[0], (v) => (s.size[0] = v), 5, 1500), this.mm('Height (Y)', s.size[1], (v) => (s.size[1] = v), 2, 1500), this.mm('Length (Z)', s.size[2], (v) => (s.size[2] = v), 5, 1500));
         if (s.type === 'wedge') out.push(this.mm('Front lip', s.lip, (v) => (s.lip = v), 0, 500));
+        break;
+      case 'armour':
+        out.push(this.mm('Width (X)', s.size[0], (v) => (s.size[0] = v), 5, 1500), this.mm('Height (Y)', s.size[1], (v) => (s.size[1] = v), 2, 1500), this.mm('Length (Z)', s.size[2], (v) => (s.size[2] = v), 5, 1500));
+        out.push(h('div', { class: 'hint' }, 'Sloped armour deflects hits and is harder to get under. The sides rise straight to the belt line, then lean in.'));
+        out.push(this.num('Belt line', Math.round(s.belt * 100), (v) => (s.belt = v / 100), { min: 0, max: 100, step: 1, unit: '% up' }));
+        out.push(this.mm('Side slope (each side)', s.sides, (v) => (s.sides = v), 0, 400), this.mm('Front rake', s.front, (v) => (s.front = v), 0, 600), this.mm('Rear rake', s.rear, (v) => (s.rear = v), 0, 600));
         break;
       case 'cylinder': case 'cone':
         out.push(this.mm('Radius', s.radius, (v) => (s.radius = v), 5, 750), this.mm('Length (Y)', s.length, (v) => (s.length = v), 2, 1500));
@@ -609,6 +615,7 @@ function convertShape(s: Shape, t: Shape['type']): Shape {
   switch (t) {
     case 'box': return { type: 'box', size };
     case 'wedge': return { type: 'wedge', size, lip: 0.01 };
+    case 'armour': return { type: 'armour', size, sides: Math.round(x * 150) / 1000, front: 0, rear: Math.round(z * 300) / 1000, belt: 0.5 };
     case 'cylinder': return { type: 'cylinder', radius: r, length: l };
     case 'cone': return { type: 'cone', radius: r, length: l };
     case 'sphere': return { type: 'sphere', radius: r };
