@@ -1,10 +1,10 @@
 import * as THREE from 'three';
-import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js';
 import { ARENA, arenaBoxes, flamePitRect } from '../sim/arena';
-import type { Shape } from '../sim/design';
-import { planeMap, wedgePoints } from '../sim/shapes';
 import type { Match } from '../sim/match';
 import type { Part, Robot } from '../sim/robot';
+import { MechanismView } from './mechanisms';
+import { buildPartMesh } from './partMesh';
+import { setWear } from './surfaces';
 
 /** Three.js mirror of a Match. Reads simulation state; never writes it. */
 export class MatchView {
@@ -12,7 +12,8 @@ export class MatchView {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
   private match: Match | null = null;
-  private partMeshes: Array<{ part: Part; mesh: THREE.Object3D; base: THREE.Color; mats: THREE.MeshStandardMaterial[] }> = [];
+  private partMeshes: Array<{ part: Part; mesh: THREE.Object3D; mats: THREE.MeshPhysicalMaterial[]; scorch: number }> = [];
+  private mechanisms: MechanismView[] = [];
   private blurDiscs: Array<{ robot: Robot; index: number; mesh: THREE.Mesh }> = [];
   private highlighted: string | null = null;
   private raycaster = new THREE.Raycaster();
@@ -29,6 +30,7 @@ export class MatchView {
   cameraMode: 'tv' | 'follow' = 'tv';
   followIndex = 0;
   private orbit = { yaw: 0.6, pitch: 0.55, dist: 3.2 };
+  private snapCamera = false;
   private sparks: THREE.Points;
   private sparkData: Array<{ p: THREE.Vector3; v: THREE.Vector3; life: number }> = [];
   private sparkPositions = new Float32Array(600 * 3);
@@ -43,6 +45,11 @@ export class MatchView {
     this.renderer.toneMappingExposure = 1.35;
     this.scene.background = new THREE.Color(0x07080b);
     this.scene.fog = new THREE.Fog(0x07080b, 22, 45);
+    // Something for metal to reflect: a soft studio room, kept dim for the arena's mood.
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.scene.environment = pmrem.fromScene(arenaEnvironment(), 0.02).texture;
+    this.scene.environmentIntensity = 1;
+    pmrem.dispose();
     this.buildLights();
     this.buildArena();
     this.scene.add(this.robotGroup);
@@ -81,6 +88,12 @@ export class MatchView {
       e.preventDefault();
       this.orbit.dist = Math.min(12, Math.max(1.2, this.orbit.dist * (1 + Math.sign(e.deltaY) * 0.1)));
     }, { passive: false });
+  }
+
+  /** Set the follow camera's orbit (and snap to it). */
+  setOrbit(yaw: number, pitch: number, dist: number) {
+    this.orbit = { yaw, pitch, dist };
+    this.snapCamera = true;
   }
 
   resize() {
@@ -195,17 +208,44 @@ export class MatchView {
 
   setMatch(match: Match) {
     this.match = match;
+    // The garage rebuilds the bay on every edit: free the old robots' GPU resources.
+    this.robotGroup.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      mesh.geometry.dispose();
+      for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        const map = (mat as THREE.MeshStandardMaterial).map;
+        if (map instanceof THREE.CanvasTexture) map.dispose();
+        mat.dispose();
+      }
+    });
     this.robotGroup.clear();
     this.partMeshes = [];
+    this.mechanisms = [];
     this.blurDiscs = [];
     this.sparkData = [];
     for (const r of match.robots) {
+      const first = this.partMeshes.length;
       for (const part of r.parts) {
         if (!part.visual) continue;
-        const { mesh, mats } = buildPartMesh(part);
+        const { mesh, mats } = buildPartMesh(part, part.def?.parent === null ? r.design.name : null);
         this.robotGroup.add(mesh);
-        this.partMeshes.push({ part, mesh, base: new THREE.Color(part.colour ?? 0x888888), mats });
+        this.partMeshes.push({ part, mesh, mats, scorch: 0 });
       }
+      const mine = this.partMeshes.slice(first);
+      const mech = new MechanismView(r, (id, axis) => {
+        const pm = mine.find((m) => m.part.id === id);
+        const geo = (pm?.mesh.children[0] as THREE.Mesh | undefined)?.geometry;
+        const v = pm?.part.visual;
+        if (!geo || !v) return 0.05;
+        geo.computeBoundingBox();
+        const half = geo.boundingBox!.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+        const q = new THREE.Quaternion(v.rot.x, v.rot.y, v.rot.z, v.rot.w);
+        const ax = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)].map((e) => Math.abs(e.applyQuaternion(q).dot(axis)));
+        return ax[0] * half.x + ax[1] * half.y + ax[2] * half.z;
+      });
+      this.robotGroup.add(mech.group);
+      this.mechanisms.push(mech);
       r.rotors().forEach((rot, index) => {
         const disc = new THREE.Mesh(
           new THREE.CircleGeometry(rot.radius, 48),
@@ -222,7 +262,7 @@ export class MatchView {
   render(dt: number) {
     const m = this.match;
     if (m) {
-      this.syncParts();
+      this.syncParts(m, dt);
       this.syncSparks(m, dt);
       const t = m.arena.trapdoor.translation();
       this.trapdoor.position.set(t.x, t.y, t.z);
@@ -234,9 +274,10 @@ export class MatchView {
     this.renderer.render(this.scene, this.camera);
   }
 
-  private syncParts() {
-    const scorch = new THREE.Color(0x221d18);
-    for (const { part, mesh, base, mats } of this.partMeshes) {
+  private syncParts(m: Match, dt: number) {
+    const fr = flamePitRect();
+    for (const pm of this.partMeshes) {
+      const { part, mesh, mats } = pm;
       const b = part.body, v = part.visual;
       if (!b || !v || !part.collider) { mesh.visible = false; continue; }
       mesh.visible = true;
@@ -245,12 +286,18 @@ export class MatchView {
       const q = new THREE.Quaternion(bq.x, bq.y, bq.z, bq.w);
       mesh.position.set(v.pos.x, v.pos.y, v.pos.z).applyQuaternion(q).add(new THREE.Vector3(bp.x, bp.y, bp.z));
       mesh.quaternion.copy(q).multiply(new THREE.Quaternion(v.rot.x, v.rot.y, v.rot.z, v.rot.w));
-      // Battle damage shows as scorching, not as a bar.
-      if (part.kind === 'structure') {
-        mats[0].color.copy(base).lerp(scorch, (1 - Math.max(0, part.condition)) * 0.75);
+      // Battle damage shows the way it would on the real thing: paint chipped
+      // back to bare metal, gouges, and soot from the flame pit — never a bar.
+      const p = mesh.position;
+      if (m.arena.flamesOn && p.x > fr.x0 && p.x < fr.x1 && p.z > fr.z0 && p.z < fr.z1 && p.y < 0.6) pm.scorch = Math.min(1, pm.scorch + dt * 0.35);
+      const wear = 0.03 + (1 - Math.max(0, part.condition)) * 0.32;
+      const glow = this.highlighted && part.id === this.highlighted ? 0x806000 : 0x000000;
+      for (const mat of mats) {
+        setWear(mat, wear, pm.scorch);
+        mat.emissive.setHex(glow);
       }
-      mats[0].emissive.setHex(this.highlighted && part.id === this.highlighted ? 0x806000 : 0x000000);
     }
+    for (const mech of this.mechanisms) mech.update();
     for (const { robot, index, mesh } of this.blurDiscs) {
       const rot = robot.rotors()[index];
       if (!rot || !rot.actuator.child.joint) { mesh.visible = false; continue; }
@@ -318,7 +365,7 @@ export class MatchView {
 
   /** TV-style camera: high and to one side, drifting to keep both robots in frame. */
   private updateCamera(m: Match, dt: number) {
-    const k = 1 - Math.exp(-dt * 4);
+    const k = this.snapCamera ? 1 : 1 - Math.exp(-dt * 4);
     if (this.cameraMode === 'follow') {
       const r = m.robots[this.followIndex];
       if (r) {
@@ -383,73 +430,33 @@ export class MatchView {
   }
 }
 
-function buildPartMesh(part: Part): { mesh: THREE.Object3D; mats: THREE.MeshStandardMaterial[] } {
-  const shape = part.visual!.shape;
-  const colour = part.colour ?? 0x888888;
-  const mat = new THREE.MeshStandardMaterial({ color: colour, metalness: 0.45, roughness: 0.45, side: shape.type === 'mesh' ? THREE.DoubleSide : THREE.FrontSide });
-  const geo = shapeGeometry(shape);
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  const group = new THREE.Group();
-  group.add(mesh);
-  // Crisp edges read better at TV distance.
-  if (shape.type !== 'mesh' && shape.type !== 'lathe') {
-    group.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo, 25), new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.45 })));
+/**
+ * What shiny parts reflect: a dark studio with lighting rigs overhead and a
+ * few coloured stage lights, like the arena itself. Only used for reflections.
+ */
+function arenaEnvironment(): THREE.Scene {
+  const env = new THREE.Scene();
+  const room = new THREE.Mesh(new THREE.BoxGeometry(40, 16, 40), new THREE.MeshBasicMaterial({ color: 0x0b0c10, side: THREE.BackSide }));
+  room.position.y = 6;
+  env.add(room);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshBasicMaterial({ color: 0x24262b }));
+  floor.rotation.x = -Math.PI / 2;
+  env.add(floor);
+  const panel = (w: number, d: number, colour: number, x: number, y: number, z: number) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshBasicMaterial({ color: colour, side: THREE.DoubleSide }));
+    m.rotation.x = Math.PI / 2;
+    m.position.set(x, y, z);
+    env.add(m);
+  };
+  // Overhead lighting rig: long white strips.
+  for (const z of [-6, 0, 6]) panel(18, 0.8, 0xbfc4cc, 0, 12, z);
+  // Stage lights in the corners, matching the arena's.
+  for (const [x, z, c] of [[-14, -14, 0xff5522], [14, 14, 0x3366ff], [14, -14, 0xffaa22], [-14, 14, 0xaa33ff]] as const) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(1.2, 12, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(3) }));
+    m.position.set(x, 6, z);
+    env.add(m);
   }
-  if (part.kind === 'wheel' && shape.type === 'cylinder') {
-    // Hub, so you can see the wheel turning.
-    const hub = new THREE.Mesh(new THREE.CylinderGeometry(shape.radius * 0.45, shape.radius * 0.45, shape.length + 0.006, 6), new THREE.MeshStandardMaterial({ color: 0x9a9fa6, metalness: 0.8, roughness: 0.3 }));
-    group.add(hub);
-  }
-  return { mesh: group, mats: [mat] };
-}
-
-/** Three.js geometry for any design shape, centred on the shape origin like its colliders. */
-export function shapeGeometry(s: Shape): THREE.BufferGeometry {
-  switch (s.type) {
-    case 'box': return new THREE.BoxGeometry(s.size[0], s.size[1], s.size[2]);
-    case 'cylinder': return new THREE.CylinderGeometry(s.radius, s.radius, s.length, 32);
-    case 'cone': return new THREE.ConeGeometry(s.radius, s.length, 32);
-    case 'capsule': return new THREE.CapsuleGeometry(s.radius, s.length, 6, 16);
-    case 'sphere': return new THREE.SphereGeometry(s.radius, 28, 18);
-    case 'lathe': return new THREE.LatheGeometry(s.profile.map(([r, y]) => new THREE.Vector2(Math.abs(r), y)), Math.max(8, s.segments ?? 32));
-    case 'mesh': {
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.Float32BufferAttribute(s.vertices, 3));
-      g.setIndex(s.indices);
-      g.computeVertexNormals();
-      return g;
-    }
-    case 'extrude': {
-      const outline = new THREE.Shape(s.outline.map(([u, v]) => new THREE.Vector2(u, v)));
-      const g = new THREE.ExtrudeGeometry(outline, { depth: s.depth, bevelEnabled: false });
-      g.translate(0, 0, -s.depth / 2);
-      // Extrude draws in XY and extrudes along Z; map into the chosen plane.
-      const map = planeMap(s.plane);
-      const pos = g.attributes.position as THREE.BufferAttribute;
-      for (let i = 0; i < pos.count; i++) {
-        const [x, y, z] = map(pos.getX(i), pos.getY(i), pos.getZ(i));
-        pos.setXYZ(i, x, y, z);
-      }
-      // 'side' and 'top' mappings mirror the winding; flip faces back.
-      if (s.plane !== 'front') {
-        const idx = g.index;
-        if (idx) for (let i = 0; i < idx.count; i += 3) { const a = idx.getX(i); idx.setX(i, idx.getX(i + 2)); idx.setX(i + 2, a); }
-        else for (let i = 0; i < pos.count; i += 3) {
-          const ax = pos.getX(i), ay = pos.getY(i), az = pos.getZ(i);
-          pos.setXYZ(i, pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2));
-          pos.setXYZ(i + 2, ax, ay, az);
-        }
-      }
-      g.computeVertexNormals();
-      return g;
-    }
-    default: {
-      const pts = (s.type === 'wedge' ? wedgePoints(s.size, s.lip) : s.points).map((p) => new THREE.Vector3(...p));
-      return new ConvexGeometry(pts);
-    }
-  }
+  return env;
 }
 
 function canvasTexture(size: number, draw: (g: CanvasRenderingContext2D) => void): THREE.CanvasTexture {

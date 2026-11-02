@@ -114,6 +114,27 @@ collisions all come from those same pieces.
 
 Rendering uses the true shape.
 
+**Rendering** (`src/render/`) draws each part the way it would be built,
+from the design alone, so player-built robots get the same treatment:
+
+- `partMesh.ts`: flat-faced parts are split into their real faces. Edges are
+  chamfered like cut and deburred plate, and hollow shells get button-head
+  bolts along every panel edge, about every 100 mm. Wheels get a treaded
+  tyre, a spoked rim, a hub and axle nuts. Batteries, gas bottles, ballast
+  and flamethrowers look like the real items. The chassis' top deck carries
+  the robot's name.
+- `surfaces.ts`: per-material finishes (brushed aluminium, ground hardened
+  steel, matt HDPE, clear polycarbonate, wood grain…) with paint over them.
+  Damage chips paint back to the bare material in proportion to part
+  condition, and the flame pit leaves soot.
+- `mechanisms.ts`: pneumatic rams whose rods extend as the joint opens, drive
+  motors and gearboxes behind the wheels, weapon motors, spinner hubs and
+  hinge pins.
+
+None of this changes collision shapes; visuals stay within a few millimetres
+of the physics. `showroom.html?robot=<id>` (dev server) shows one robot
+under a close camera, with `fire=1`, `damage=0.6`, `yaw`, `pitch`, `dist`.
+
 **Also:**
 
 - Ball joints for flails.
