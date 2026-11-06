@@ -9,9 +9,9 @@ RobotDesign format, drive/weapon/damage formulas, rules and roadmap. Read the
 relevant section before changing behaviour, and **update it in the same change**
 when you change how something works.
 
-> `README.md` is currently corrupted (the same sections repeated ~4,000 times,
-> ~14 MB). Don't read it whole; `git show 2688b73:README.md` is a clean early
-> version if you need its structure.
+`README.md` is the player-facing overview (~150 lines); keep it in step with
+features. Edit it with targeted replacements, and check `wc -l README.md`
+after — a bad scripted edit once repeated its Garage section ~4,000 times.
 
 ## Commands
 
