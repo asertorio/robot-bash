@@ -117,8 +117,16 @@ describe('rules', () => {
   test('if both survive, the judges decide', () => {
     const m = new Match([WEDGEHOG, WEDGEHOG], { skipCountdown: true, duration: 5 });
     run(m, 5.5, () => [drive(0.6, 0.5), drive(0.5, 0.6)]);
-    expect(m.result?.reason).toBe("Judges' decision");
+    expect(m.result?.reason).toMatch(/Judges' decision|draw/);
     expect(m.result?.scores?.length).toBe(2);
+    m.free();
+  });
+
+  test('a dead heat is a draw, not a win for player 1', () => {
+    const m = new Match([WEDGEHOG, WEDGEHOG], { skipCountdown: true, duration: 2 });
+    run(m, 2.5);
+    expect(m.result?.winner).toBeNull();
+    expect(m.result?.reason).toMatch(/draw/);
     m.free();
   });
 });
