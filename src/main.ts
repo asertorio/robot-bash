@@ -40,10 +40,10 @@ class App {
   start() {
     // A click (not a drag) on the 3D view selects a part in the garage.
     const canvas = document.getElementById('view')!;
-    let down = { x: 0, y: 0 };
-    canvas.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY }));
+    let down = { x: 0, y: 0, gizmo: false };
+    canvas.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY, gizmo: this.view.gizmoBusy() }));
     canvas.addEventListener('pointerup', (e) => {
-      if (!this.garage || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
+      if (!this.garage || down.gizmo || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
       this.pickHandler?.(this.view.pick(e.clientX, e.clientY));
     });
     this.attract();
@@ -63,6 +63,7 @@ class App {
   private beginMatch(designs: RobotDesign[], controllers: Controller[], background = false, houseCount = 0) {
     this.match?.free();
     this.garage = null;
+    this.view.setGizmo(null);
     this.view.cameraMode = 'tv';
     this.match = new Match(designs, { duration: background ? 1e9 : 180, house: HOUSE_ROBOTS.slice(0, houseCount) });
     this.cpus = controllers.map((c) => (c === 'CPU' ? new CpuDriver() : null));
@@ -114,7 +115,7 @@ class App {
         h('button', { onclick: () => this.controlsScreen() }, 'Controls'),
         h('button', { onclick: () => this.howToScreen() }, 'How to play')),
       h('div', { class: 'hazard-bar' }),
-      h('div', { class: 'footnote' }, 'A physics-simulated robot combat game in the spirit of the classic British TV show. Every hit is worked out from real forces — no health bars.')));
+      h('div', { class: 'footnote' }, 'A physics-simulated robot combat game in the spirit of the classic British TV show. Every hit is worked out from real forces — no hit points.')));
   }
 
   private garageScreen(initial?: RobotDesign) {
@@ -130,13 +131,15 @@ class App {
         this.match?.free();
         this.match = bay;
         this.cpus = [];
-        this.view.setMatch(bay);
+        // Rebuilding after an edit: keep looking from where you were.
+        this.view.setMatch(bay, this.garage !== null);
         this.view.cameraMode = 'follow';
         this.view.followIndex = 0;
       },
       bay: () => this.match,
-      exit: () => { this.garage = null; this.view.highlight(null); this.attract(); this.mainMenu(); },
+      exit: () => { this.garage = null; this.view.highlight(null); this.view.setGizmo(null); this.attract(); this.mainMenu(); },
       highlight: (id) => this.view.highlight(id),
+      gizmo: (opts) => this.view.setGizmo(opts),
       onPick: (cb) => { this.pickHandler = cb; },
     }, initial);
     this.garage = garage;
@@ -144,15 +147,24 @@ class App {
   }
 
   private selectScreen() {
-    this.roster = [...TEMPLATES, ...loadDesigns()];
+    const saved = loadDesigns();
+    this.roster = [...TEMPLATES, ...HOUSE_ROBOTS, ...saved];
     this.picks = this.picks.map((p) => Math.min(p, this.roster.length - 1));
     const n = () => this.roster.length;
     const render = () => {
       const cards = [0, 1].map((p) => {
         const design = this.roster[this.picks[p]];
         const stats = computeStats(design);
-        const mine = !TEMPLATES.includes(design);
+        const mine = saved.includes(design);
+        const house = HOUSE_ROBOTS.includes(design);
         const issues = scrutineer(design);
+        const group = (label: string, list: RobotDesign[]) => list.length
+          ? h('optgroup', { label }, ...list.map((d) => h('option', { value: String(this.roster.indexOf(d)), selected: d === design }, d.name)))
+          : null;
+        const pick = h('select', {
+          class: 'robot-pick', 'aria-label': `Player ${p + 1} robot`,
+          onchange: () => { this.picks[p] = Number(pick.value); pick.blur(); render(); },
+        }, group('Starter robots', TEMPLATES), group('House robots', HOUSE_ROBOTS), group('Your builds', saved));
         const cycle = (d: number) => { this.picks[p] = (this.picks[p] + d + n()) % n(); render(); };
         const setCtl = (c: Controller) => { this.controllers[p] = c; render(); };
         return h('div', { class: 'robot-card', style: `--pc:${PLAYER_COLOURS[p]}` },
@@ -163,10 +175,14 @@ class App {
             h('button', { onclick: () => cycle(-1), 'aria-label': 'Previous robot' }, '◀'),
             h('div', { class: 'name', style: `color:${design.colour}` }, design.name),
             h('button', { onclick: () => cycle(1), 'aria-label': 'Next robot' }, '▶')),
+          pick,
           mine && h('div', { class: 'mine' }, 'Your build'),
+          house && h('div', { class: 'mine' }, 'House robot'),
           h('div', { class: 'desc' }, design.description),
           h('dl', { class: 'stats' }, ...statLines(stats).flatMap(([k, v, bad]) => [h('dt', {}, k), h('dd', { class: bad ? 'over' : '' }, v)])),
-          !isLegal(issues) && h('div', { class: 'legal bad' }, `Fails heavyweight scrutineering: ${issues.find((i) => i.level === 'error')!.text}`),
+          house
+            ? h('div', { class: 'legal' }, 'Built to house-robot rules, not the competition\'s: far over the heavyweight limit.')
+            : !isLegal(issues) && h('div', { class: 'legal bad' }, `Fails heavyweight scrutineering: ${issues.find((i) => i.level === 'error')!.text}`),
           h('div', { class: 'keys-hint' }, p === 0 ? 'A / D to change robot' : 'J / L to change robot'),
           mine && h('button', { class: 'small', style: 'margin-top:8px', onclick: () => this.garageScreen(design) }, 'Edit in garage'));
       });
@@ -216,7 +232,7 @@ class App {
           h('li', {}, 'Player 1: ', kb('W'), kb('A'), kb('S'), kb('D'), ' drive · ', kb('E'), ' or ', kb('Space'), ' weapon · ', kb('Q'), ' weapon 2 · ', kb('C'), ' macro'),
           h('li', {}, 'Player 2: ', kb('I'), kb('J'), kb('K'), kb('L'), ' or arrows drive · ', kb('O'), ' or ', kb('/'), ' weapon · ', kb('U'), ' weapon 2 · ', kb('M'), ' macro'),
           h('li', {}, 'Gamepads: left stick drives, A / RT weapon, B / LT weapon 2.'),
-          h('li', {}, kb('Esc'), ' pause · ', kb('Tab'), ' damage report')),
+          h('li', {}, kb('Esc'), ' pause · ', kb('Tab'), ' cycles the damage display: health diagrams, full report, off')),
         h('h3', {}, 'It\'s physics, not hit points'),
         h('ul', {},
           h('li', {}, 'Flippers are driven by gas pressure on a ram, and you only have so much gas.'),
@@ -228,7 +244,7 @@ class App {
 
   private fightKeys(code: string) {
     if (code === 'Escape') this.togglePause();
-    if (code === 'Tab' && this.hud) this.hud.showReport = !this.hud.showReport;
+    if (code === 'Tab' && this.hud) this.hud.cycleReport();
   }
 
   private togglePause() {

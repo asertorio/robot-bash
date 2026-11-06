@@ -1,7 +1,8 @@
 import { ARENA } from './arena';
 import type { ControlState } from './control';
 import type { Robot } from './robot';
-import { qconj, qrotate, vsub, type V3 } from './vmath';
+import type RAPIER from '@dimforge/rapier3d-compat';
+import { qaxis, qconj, qmul, qrotate, vadd, vscale, vsub, type V3 } from './vmath';
 
 /**
  * Point-and-drive steering towards a world position, handling being upside
@@ -29,13 +30,13 @@ export function steerTo(me: Robot, target: V3, maxThrottle = 1): { left: number;
 export class CpuDriver {
   private stuckFor = 0;
   private reverseFor = 0;
-  private fireCooldown = 0;
-  private pressed = new Set<string>();
+  private arms = new WeaponOperator();
+  private dt = 0;
 
   update(me: Robot, foe: Robot | undefined, pitOpen: boolean, dt: number): ControlState {
     const out: ControlState = { left: 0, right: 0, weapon: false, weapon2: false };
     if (!foe) return out;
-    this.fireCooldown -= dt;
+    this.dt = dt;
 
     // Where is the target, in my own frame? (+z ahead, +x to my left.)
     const target = foe.position;
@@ -61,7 +62,7 @@ export class CpuDriver {
       this.reverseFor -= dt;
       out.left = -0.8;
       out.right = -0.5;
-      return this.weapons(me, out, dist, bearing);
+      return this.weapons(me, foe, out);
     }
     // Includes shoving stalemates: going nowhere, so try another angle.
     const spinning = Math.abs(me.chassis.angvel().y) > 0.4;
@@ -78,38 +79,141 @@ export class CpuDriver {
     out.right = Math.max(-1, Math.min(1, throttle - turn));
     // Upside down, the wheels drive backwards and the sides swap over.
     if (inverted) [out.left, out.right] = [-out.right, -out.left];
-    return this.weapons(me, out, dist, bearing);
+    return this.weapons(me, foe, out);
   }
 
-  private weapons(me: Robot, out: ControlState, dist: number, bearing: number): ControlState {
-    const fire = this.fireCooldown <= 0 && ((dist < 1.1 && Math.abs(bearing) < 0.45) || me.uprightness < -0.3);
-    if (fire) this.fireCooldown = 1.2;
-    return useWeapons(me, out, fire, this.pressed);
+  private weapons(me: Robot, foe: Robot, out: ControlState): ControlState {
+    return this.arms.update(me, [foe], out, this.dt, { selfRight: true });
   }
 }
 
 const BUTTONS = ['button1', 'button2', 'button3', 'button4'] as const;
 const FIELD = { button1: 'weapon', button2: 'weapon2', button3: 'weapon3', button4: 'weapon4' } as const;
+type Button = (typeof BUTTONS)[number];
+
+/** A weapon is worth firing if, somewhere along its stroke, it would come this close to the target (m). */
+const HIT_MARGIN = 0.03;
+/** Only bother checking targets this close (m). */
+const LOOK_RANGE = 2.5;
+
+const shapes = new WeakMap<RAPIER.Collider, RAPIER.Shape>();
+const shapeOf = (c: RAPIER.Collider): RAPIER.Shape => {
+  let sh = shapes.get(c);
+  if (!sh) { sh = c.shape; shapes.set(c, sh); }
+  return sh;
+};
 
 /**
- * Work every weapon button the robot has: keep toggled spinners running, and
- * press attack buttons when `attack` is true. `pressed` remembers last frame's
- * presses so toggles see a fresh press each time.
+ * Works a robot's weapon buttons the way a driver would: keep spinners and
+ * drums running, and fire flippers, axes, lifters, rams, crushers and
+ * flamethrowers when — and only when — the stroke would actually reach the
+ * target, holding the button long enough for the whole stroke.
  */
-export function useWeapons(me: Robot, out: ControlState, attack: boolean, pressed: Set<string>): ControlState {
-  const uses = me.buttonUses();
-  for (const b of BUTTONS) {
-    const kinds = uses.get(b);
-    if (!kinds) continue;
-    let press = false;
-    if (kinds.has('spinner')) {
-      const off = me.actuators.some((a) => a.def.input.source === b && a.def.input.mode === 'toggle' && !a.toggled && a.child.joint);
-      press = off && !pressed.has(b);
-    } else {
-      press = attack;
+export class WeaponOperator {
+  private hold = new Map<Button, number>();
+  private rest = new Map<Button, number>();
+  private pressed = new Set<Button>();
+
+  /** `attack` forces every attack button (house robots' scripted moments); `selfRight` fires flippers when upside down. */
+  update(me: Robot, targets: Robot[], out: ControlState, dt: number, opts: { attack?: boolean; selfRight?: boolean } = {}): ControlState {
+    const uses = me.buttonUses();
+    for (const b of BUTTONS) {
+      const kinds = uses.get(b);
+      const flame = me.flames.some((f) => f.def.input.source === b);
+      if (!kinds && !flame) continue;
+      let press = false;
+      if (kinds?.has('spinner')) {
+        // Toggle switches: press once to switch on, then leave it.
+        const off = me.actuators.some((a) => a.def.input.source === b && a.def.input.mode === 'toggle' && !a.toggled && a.child.joint);
+        press = off && !this.pressed.has(b);
+        if (press) this.pressed.add(b); else this.pressed.delete(b);
+      } else if (kinds?.has('motor')) {
+        // A held motor (drum, saw, crusher screw): keep it going while anyone is near.
+        press = targets.some((t) => planarDistance(me, t) < LOOK_RANGE);
+      } else {
+        const holding = (this.hold.get(b) ?? 0) - dt;
+        const resting = (this.rest.get(b) ?? 0) - dt;
+        this.hold.set(b, holding);
+        this.rest.set(b, resting);
+        if (holding > 0) press = true;
+        else if (resting <= 0) {
+          const upsideDown = opts.selfRight && me.uprightness < -0.3 && !!kinds?.has('pneumatic');
+          if (opts.attack || upsideDown || targets.some((t) => this.wouldHit(me, t, b))) {
+            const d = this.strokeTime(me, b);
+            this.hold.set(b, d);
+            // Give a slow lifter time to drive them somewhere before trying again.
+            this.rest.set(b, d + (d > 1 ? 2 : 0.5));
+            press = true;
+          }
+        }
+      }
+      out[FIELD[b]] = press;
     }
-    if (press) pressed.add(b); else pressed.delete(b);
-    out[FIELD[b]] = press;
+    return out;
   }
-  return out;
+
+  /** How long to hold a button for a full stroke. */
+  private strokeTime(me: Robot, b: Button): number {
+    let t = me.flames.some((f) => f.def.input.source === b) ? 0.8 : 0.35;
+    for (const a of me.actuators) {
+      if (a.def.input.source !== b) continue;
+      if (a.def.type === 'pneumatic') t = Math.max(t, Number.isFinite(a.maxRate) ? 1.6 : 0.5);
+      if (a.def.type === 'servo') t = Math.max(t, 1.0);
+    }
+    return t;
+  }
+
+  /** Would firing button `b` now hit `foe`? Sweeps each driven part through its stroke. */
+  wouldHit(me: Robot, foe: Robot, b: Button): boolean {
+    if (planarDistance(me, foe) > LOOK_RANGE) return false;
+    const foeColliders = foe.parts.filter((p) => !p.detached).flatMap((p) => foe.collidersOf(p));
+    for (const f of me.flames) {
+      if (f.def.input.source !== b || f.fuel <= 0 || !f.part.collider || !f.part.body) continue;
+      const origin = f.part.collider.translation();
+      const dir = qrotate(f.part.body.rotation(), f.dir);
+      const to = vsub(foe.position, origin);
+      const along = to.x * dir.x + to.y * dir.y + to.z * dir.z;
+      const off = Math.hypot(to.x - dir.x * along, to.y - dir.y * along, to.z - dir.z * along);
+      if (along > 0 && along < f.def.range + 0.2 && off < 0.35 + along * 0.35) return true;
+    }
+    if (me.gasLeft <= 0 && me.actuators.every((a) => a.def.input.source !== b || a.def.type === 'pneumatic')) return false;
+    for (const a of me.actuators) {
+      if (a.def.input.source !== b || !a.child.joint) continue;
+      const pivot = a.child.body.translation();
+      const axis = qrotate(a.parent.body.rotation(), a.axis);
+      // Which way, and how far, does firing move the joint?
+      let travel: number;
+      if (a.def.type === 'servo') {
+        const hi = a.def.targets[2];
+        travel = (a.joint === 'hinge' ? (hi * Math.PI) / 180 : hi / 1000) - a.position;
+      } else {
+        const hi = a.limits ? a.limits[1] : a.joint === 'hinge' ? Math.PI / 2 : 0.15;
+        travel = Math.max(0, hi - a.position);
+      }
+      if (Math.abs(travel) < 1e-3) continue;
+      const own = me.parts.filter((p) => p.bodyKey === a.child.key && !p.detached && p.kind === 'structure').flatMap((p) => me.collidersOf(p));
+      // A slow lifter only lifts what's already sitting on it; anything else
+      // it would just push away. Fast weapons hit whatever their stroke reaches.
+      const slow = a.def.type === 'pneumatic' && Number.isFinite(a.maxRate);
+      for (const k of slow ? [0.08] : [0.08, 0.3, 0.55, 0.8, 1]) {
+        const d = travel * k;
+        const turn = a.joint === 'hinge' ? qaxis(axis, d) : { x: 0, y: 0, z: 0, w: 1 };
+        for (const c of own) {
+          const p = c.translation();
+          const pos = a.joint === 'hinge' ? vadd(pivot, qrotate(turn, vsub(p, pivot))) : vadd(p, vscale(axis, d));
+          const rot = qmul(turn, c.rotation());
+          for (const fc of foeColliders) {
+            const hit = fc.contactShape(shapeOf(c), pos, rot, HIT_MARGIN);
+            // A lifter wants them on top of it, not just touching its tip.
+            if (hit && hit.distance < HIT_MARGIN && (!slow || hit.normal2.y > 0.5)) return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+}
+
+function planarDistance(a: Robot, b: Robot): number {
+  return Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z);
 }

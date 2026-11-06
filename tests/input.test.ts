@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { defaultProfile, parseMacro, type Binding } from '../src/input/bindings';
-import { MacroRunner, mixControls } from '../src/input/input';
+import { MacroRunner, keyLevel, mixControls } from '../src/input/input';
 import { dcMotor } from '../src/sim/motor';
 import { MOTORS } from '../src/data/parts';
 
@@ -18,6 +18,19 @@ describe('mixing', () => {
     const p = { ...defaultProfile(0), mode: 'tank' as const };
     const c = mixControls(p, keys('KeyW', 'KeyF'), new Set());
     expect(c).toMatchObject({ left: 1, right: -1 });
+  });
+
+  test('drive keys ramp up while held, weapon keys do not', () => {
+    const p = defaultProfile(0);
+    // A reader like the real one: keys ramp on the drive channel only.
+    const held = (t: number) => (b: Binding, drive?: boolean) => (b.device === 'key' && ['KeyW', 'KeyE'].includes(b.code) ? (drive ? keyLevel(t, 0.25) : 1) : 0);
+    const tap = mixControls(p, held(0), new Set());
+    const hold = mixControls(p, held(1), new Set());
+    expect(tap.left).toBeGreaterThan(0.2);
+    expect(tap.left).toBeLessThan(0.5);
+    expect(hold.left).toBe(1);
+    expect(tap.weapon).toBe(true);
+    expect(keyLevel(0, 0)).toBe(1);
   });
 
   test('player 2 defaults do not overlap player 1', () => {
@@ -61,5 +74,12 @@ describe('DC motor model', () => {
   });
   test('over-volting makes it stronger', () => {
     expect(dcMotor(m, 36, 1, 0).torque).toBeCloseTo(m.stallTorque * 1.5);
+  });
+  test('centred sticks brake a drive motor, but let a weapon coast', () => {
+    const half = (m.freeSpeed * Math.PI) / 60;
+    const brake = dcMotor(m, 24, 0, half, 1, true);
+    expect(brake.torque).toBeCloseTo(-m.stallTorque / 2);
+    expect(brake.current).toBe(0);
+    expect(dcMotor(m, 24, 0, half).torque).toBe(0);
   });
 });

@@ -2,43 +2,80 @@ import type { MatchView } from '../render/view';
 import { conditionLabel } from '../sim/damage';
 import type { Match } from '../sim/match';
 import type { Robot } from '../sim/robot';
+import { RobotDiagram, gauge, shotsLeft } from './diagram';
 import { h } from './dom';
 import { clock } from './format';
+
+/** What the damage display shows: the little health diagrams, those plus the full report, or nothing. */
+export type ReportMode = 'diagram' | 'full' | 'off';
+const REPORT_KEY = 'robot-bash.hud.report.v1';
+const REPORT_MODES: ReportMode[] = ['diagram', 'full', 'off'];
+
+function loadReportMode(): ReportMode {
+  try {
+    const v = localStorage.getItem(REPORT_KEY) as ReportMode | null;
+    return v && REPORT_MODES.includes(v) ? v : 'diagram';
+  } catch { return 'diagram'; }
+}
 
 export const PLAYER_COLOURS = ['#e2412f', '#3a8ee6', '#4cc26b', '#c86be6'];
 
 /** In-fight overlay: names, timer, instrument readouts, the count, commentary. */
 export class Hud {
   readonly el: HTMLDivElement;
-  showReport = false;
+  private reportMode: ReportMode = loadReportMode();
+  private diagrams: RobotDiagram[] = [];
+  private gaugeBoxes: HTMLDivElement[] = [];
+  private help: HTMLDivElement;
   private timer: HTMLDivElement;
   private big: HTMLDivElement;
   private feed: HTMLDivElement;
   private metas: HTMLDivElement[] = [];
   private tags: HTMLDivElement[] = [];
-  private report: HTMLDivElement;
+  private reports: HTMLDivElement[] = [];
   private textClock = 0;
 
   constructor(private match: Match, controllers: string[]) {
     this.timer = h('div', { class: 'timer' }, '3:00');
     const boxes = match.competitors.map((r, i) => {
       const meta = h('div', { class: 'pmeta' });
+      const gauges = h('div', { class: 'gauges' });
+      const diagram = new RobotDiagram(110);
+      const report = h('div', { class: 'report' });
+      this.reports.push(report);
       this.metas.push(meta);
+      this.gaugeBoxes.push(gauges);
+      this.diagrams.push(diagram);
       return h('div', { class: `pbox${i % 2 ? ' right' : ''}`, style: `--pc:${PLAYER_COLOURS[i]}` },
         h('div', { class: 'pname' }, r.design.name),
         h('div', { class: 'pmeta' }, `P${i + 1} · ${controllers[i]}`),
-        meta);
+        gauges, meta, diagram.el, report);
     });
+    this.help = h('div', { class: 'help' });
     this.big = h('div', { class: 'big' });
     this.feed = h('div', { class: 'feed' });
-    this.report = h('div', { class: 'report' });
     this.tags = match.robots.map((r, i) => i < match.competitors.length
       ? h('div', { class: 'tag', style: `--pc:${PLAYER_COLOURS[i]}` }, `P${i + 1}`)
       : h('div', { class: 'tag house' }, r.design.name));
     this.el = h('div', { class: 'hud' },
       h('div', { class: 'topbar' }, boxes[0], this.timer, boxes[1]),
-      this.report, this.big, this.feed, ...this.tags,
-      h('div', { class: 'help' }, 'Esc pause · Tab damage report'));
+      this.big, this.feed, ...this.tags,
+      this.help);
+    this.applyReportMode();
+  }
+
+  /** Tab: health diagrams → diagrams and the full report → nothing. */
+  cycleReport() {
+    this.reportMode = REPORT_MODES[(REPORT_MODES.indexOf(this.reportMode) + 1) % REPORT_MODES.length];
+    try { localStorage.setItem(REPORT_KEY, this.reportMode); } catch { /* not saved */ }
+    this.applyReportMode();
+  }
+
+  private applyReportMode() {
+    const next = { diagram: 'full damage report', full: 'hide damage', off: 'damage diagrams' }[this.reportMode];
+    this.help.textContent = `Esc pause · Tab ${next}`;
+    for (const d of this.diagrams) d.el.style.display = this.reportMode === 'off' ? 'none' : 'block';
+    this.textClock = 0;
   }
 
   update(view: MatchView, dt: number) {
@@ -73,7 +110,11 @@ export class Hud {
       this.timer.classList.toggle('low', left < 30);
       this.big.textContent = m.time < 1.2 ? 'Activate!' : '';
     }
-    m.competitors.forEach((r, i) => (this.metas[i].innerHTML = this.instruments(r, m.eliminated[i])));
+    m.competitors.forEach((r, i) => {
+      this.metas[i].innerHTML = this.instruments(r, m.eliminated[i]);
+      this.gaugeBoxes[i].replaceChildren(...(m.eliminated[i] ? [] : this.gauges(r)));
+      if (this.reportMode !== 'off') this.diagrams[i].draw(r);
+    });
 
     const lines = m.commentary.slice(-5);
     this.feed.replaceChildren(...lines.map((l) => {
@@ -81,23 +122,27 @@ export class Hud {
       return h('div', { class: l.level, style: `opacity:${age > 8 ? 0 : age > 6 ? 0.4 : 1}` }, l.text);
     }));
 
-    this.report.style.display = this.showReport ? 'flex' : 'none';
-    if (this.showReport) this.report.replaceChildren(...m.competitors.map((r) => this.damageTable(r)));
+    const full = this.reportMode === 'full';
+    m.competitors.forEach((r, i) => {
+      this.reports[i].style.display = full ? 'block' : 'none';
+      if (full) this.reports[i].replaceChildren(this.damageTable(r));
+    });
+  }
+
+  /** How much battery, gas and fuel is left. */
+  private gauges(r: Robot): HTMLElement[] {
+    const out = [gauge('Batt', r.energy / Math.max(1e-6, r.battery.capacity), `${Math.round((100 * r.energy) / Math.max(1e-6, r.battery.capacity))}%`)];
+    if (r.gasCapacity > 0) out.push(gauge('Gas', r.gasLeft / r.gasCapacity, `${shotsLeft(r)} shots`, { colour: '#6cb6e8' }));
+    for (const fl of r.flames) out.push(gauge('Fuel', fl.fuel / Math.max(1e-6, fl.def.fuel), `${fl.fuel.toFixed(1)} kg`, { colour: '#ff8a3a' }));
+    return out;
   }
 
   private instruments(r: Robot, out: string | null): string {
     if (out) return `<span class="bad">OUT — ${out}</span>`;
     const bits: string[] = [];
-    const pct = Math.round((100 * r.energy) / r.battery.capacity);
     if (!r.hasControl) bits.push('<span class="bad">NO RADIO</span>');
     else if (!r.powered) bits.push('<span class="bad">NO POWER</span>');
-    bits.push(`Battery <b class="${pct < 20 ? 'warn' : ''}">${pct}%</b> · ${Math.round(r.current)} A`);
-    if (r.gasCapacity > 0) {
-      const pneu = r.actuators.filter((a) => a.def.type === 'pneumatic');
-      const per = pneu.length ? pneu.reduce((t, a) => t + a.gasPerShot, 0) / pneu.length : 1;
-      const shots = Math.floor(r.gasLeft / per);
-      bits.push(`Gas <b class="${shots < 4 ? 'warn' : ''}">${Math.round(r.gasLeft)} g</b> (${shots} shots)`);
-    }
+    bits.push(`Drawing <b>${Math.round(r.current)} A</b>`);
     for (const rot of r.rotors()) {
       const gone = !rot.actuator.child.joint;
       bits.push(gone ? `<span class="bad">${rot.actuator.driven.label} gone</span>` : `${rot.actuator.driven.label} <b>${Math.round(rot.rpm).toLocaleString()} rpm</b>${rot.on ? '' : ' (off)'}`);
@@ -110,6 +155,6 @@ export class Hud {
       const c = conditionLabel(p.condition);
       return h('tr', {}, h('td', {}, p.label), h('td', { class: `cond-${c}` }, p.detached && c !== 'Destroyed' ? 'Detached' : c));
     });
-    return h('table', {}, h('tr', {}, h('th', { colSpan: 2 }, r.design.name)), ...rows);
+    return h('table', {}, ...rows);
   }
 }

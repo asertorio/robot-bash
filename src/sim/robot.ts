@@ -2,14 +2,14 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { material } from '../data/materials';
 import { BATTERIES, GEARBOX, MOTORS, RAMS, TANKS, VALVES, WHEELS, lookup, type MotorSpec, type RamSpec } from '../data/parts';
 import { actuatorMass, faceArea, partFrames, partMass, registerCatalog, resolveShape, root, shapeHalf, solidThickness, unit } from './assembly';
-import { convexPieces, hullMetrics, shapeVolume, type Piece } from './shapes';
+import { convexPieces, hullMetrics, pieceMassProps, shapeVolume, type Piece } from './shapes';
 import type { ControlState } from './control';
-import { COMPONENT_TOUGHNESS, DAMAGE, HEAT, WHEEL_TOUGHNESS, damageFor, plateToughness, transmission, type Toughness } from './damage';
+import { COMPONENT_TOUGHNESS, DAMAGE, HEAT, SHOCK, WHEEL_TOUGHNESS, damageFor, plateToughness, transmission, type Toughness } from './damage';
 import type { ActuatorDef, InputDef, PartDef, RobotDesign, Shape } from './design';
 import { DEBRIS_GROUPS, GHOST_GROUPS, robotGroups, wheelBodyGroups, wheelTyreGroups } from './groups';
 import { dcMotor } from './motor';
 import { electronicsMass, gasDensity } from './stats';
-import { mulberry32, qaxis, qconj, qmul, qrotate, twistAngle, vadd, vdot, vlen, vscale, vsub, type Q, type V3 } from './vmath';
+import { mulberry32, principalAxes, qaxis, qconj, qmul, qrotate, twistAngle, vadd, vdot, vlen, vscale, vsub, type Q, type V3 } from './vmath';
 
 export type PartKind = 'structure' | 'wheel' | 'component' | 'actuator' | 'electronics';
 
@@ -26,7 +26,7 @@ export interface Part {
   kind: PartKind;
   /** The design part this came from (actuators point at the part they drive). */
   def?: PartDef;
-  /** 1 = new, 0 = failed. Internal state — shown to players only as words. */
+  /** 1 = new, 0 = failed. Shown to players as words and as colours on the health diagram. */
   condition: number;
   failed: boolean;
   toughness: Toughness;
@@ -97,6 +97,8 @@ export interface Actuator {
   position: number;
   /** Drives the robot along (wheels, legs, rolling shells) rather than being a weapon. */
   locomotion: boolean;
+  /** Soft start: the throttle the speed controller has ramped up to so far. */
+  ramp: number;
 }
 
 export interface Rotor {
@@ -136,6 +138,10 @@ export class Robot {
   private electronicsPart: Part;
   private control: ControlState = { left: 0, right: 0, weapon: false, weapon2: false };
   private gait = { left: 0, right: Math.PI };
+  /** Recent chassis velocities (a ring), and the worst jolt of the impact in progress. */
+  private velRing: V3[] = [];
+  private velAt = 0;
+  private shockPeak = 0;
   private springs: Array<{ child: BodyInfo; parent: BodyInfo; axis: V3; anchor: V3; joint: 'hinge' | 'slider'; stiffness: number; damping: number }> = [];
   /** Flamethrowers fitted, and whether each is lit right now. */
   readonly flames: Array<{ part: Part; def: Extract<NonNullable<PartDef['component']>, { type: 'flamethrower' }>; dir: V3; fuel: number; on: boolean; toggled: boolean; wasPressed: boolean }> = [];
@@ -281,7 +287,7 @@ export class Robot {
     const act: Actuator = {
       def, joint: p.joint.type as 'hinge' | 'slider', driven, part, child, parent, axis, anchor, limits,
       area: 0, gasPerShot: 0, timeConstant: 0.05, maxRate: Infinity,
-      toggled: false, wasPressed: false, firing: false, fireTime: 0, shotScale: 1, speed: 0, position: 0,
+      toggled: false, wasPressed: false, firing: false, fireTime: 0, shotScale: 1, speed: 0, position: 0, ramp: 0,
       locomotion: ['left', 'right', 'throttle', 'steer', 'gait'].includes(def.input.source),
     };
     if (def.type === 'pneumatic') {
@@ -322,7 +328,17 @@ export class Robot {
     pieces.forEach((piece, i) => {
       const { desc, offset } = pieceCollider(piece);
       const at = vadd(centre, qrotate(rot, offset));
-      desc.setTranslation(at.x, at.y, at.z).setRotation(rot).setMass(Math.max(1e-4, (mass * vols[i]) / total)).setFriction(friction).setRestitution(restitution);
+      const m = Math.max(1e-4, (mass * vols[i]) / total);
+      desc.setTranslation(at.x, at.y, at.z).setRotation(rot).setFriction(friction).setRestitution(restitution);
+      // Rapier's own mass properties go wrong for very flat hulls; use ours.
+      const mp = pieceMassProps(piece);
+      if (mp) {
+        const { values, frame } = principalAxes(mp.inertia);
+        const floor = 1e-9;
+        desc.setMassProperties(m, { x: mp.com[0], y: mp.com[1], z: mp.com[2] }, { x: Math.max(floor, values.x * m), y: Math.max(floor, values.y * m), z: Math.max(floor, values.z * m) }, frame);
+      } else {
+        desc.setMass(m);
+      }
       desc.setCollisionGroups(groups);
       if (groups !== GHOST_GROUPS) desc.setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(DAMAGE.EVENT_THRESHOLD);
       const c = this.world.createCollider(desc, body);
@@ -480,7 +496,15 @@ export class Robot {
     }
 
     if (a.def.type === 'motor') {
-      const out = dcMotor(a.motor!, voltage, Math.max(-1, Math.min(1, cmd)), a.speed * a.def.gear, health);
+      let throttle = Math.max(-1, Math.min(1, cmd));
+      const soft = a.def.softStart ?? 0;
+      if (soft > 0) {
+        // Ramp up gently; easing off or letting go is immediate.
+        const rising = Math.abs(throttle) > Math.abs(a.ramp) && (a.ramp === 0 || Math.sign(throttle) === Math.sign(a.ramp));
+        a.ramp = rising ? a.ramp + Math.sign(throttle) * Math.min(dt / soft, Math.abs(throttle) - Math.abs(a.ramp)) : throttle;
+        throttle = a.ramp;
+      }
+      const out = dcMotor(a.motor!, voltage, throttle, a.speed * a.def.gear, health, a.locomotion);
       // Gearbox and bearing drag.
       const torque = out.torque * a.def.gear * GEARBOX.efficiency - a.speed * 0.004 * a.def.gear;
       this.applyTorque(a, axis, torque * dt);
@@ -603,6 +627,42 @@ export class Robot {
       // Whatever drives this part feels its hits.
       const act = this.actuators.find((a) => a.child.key === part.bodyKey);
       if (act) hurt(act.part, prior * passOn * 0.5, total * passOn * 0.5);
+    }
+    return loss;
+  }
+
+  /**
+   * After each physics step: how hard did the chassis just get jolted? When an
+   * impact is over, its worst jolt shakes up the internals.
+   */
+  measureShock(dt: number): number {
+    const v = this.chassis.linvel();
+    const n = SHOCK.WINDOW;
+    if (this.velRing.length < n) { this.velRing.push(v); return 0; }
+    const old = this.velRing[this.velAt];
+    this.velRing[this.velAt] = v;
+    this.velAt = (this.velAt + 1) % n;
+    const t = n * dt;
+    const jolt = Math.hypot(v.x - old.x, v.y - old.y + 9.81 * t, v.z - old.z);
+    if (jolt > SHOCK.FREE) { this.shockPeak = Math.max(this.shockPeak, jolt); return 0; }
+    const peak = this.shockPeak;
+    this.shockPeak = 0;
+    return peak > 0 ? this.shock(peak) : 0;
+  }
+
+  /** Internals rattled by a jolt of `dv` m/s. Returns the condition lost. */
+  shock(dv: number): number {
+    const k = SHOCK.K * (dv - SHOCK.FREE) ** 2;
+    if (k <= 0) return 0;
+    let loss = 0;
+    for (const q of this.parts) {
+      if (q.detached || q.failed) continue;
+      const c = q.def?.component?.type;
+      const sens = q.kind === 'electronics' ? SHOCK.electronics : q.kind === 'actuator' ? SHOCK.actuator : c ? SHOCK[c] : 0;
+      if (!sens) continue;
+      const before = q.condition;
+      q.condition = Math.max(0, q.condition - k * sens);
+      loss += before - q.condition;
     }
     return loss;
   }

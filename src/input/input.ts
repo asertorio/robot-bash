@@ -1,24 +1,35 @@
 import type { ControlState } from '../sim/control';
-import { parseMacro, type Action, type Binding, type ControlProfile, type MacroStep } from './bindings';
+import { DEFAULT_KEY_RAMP, parseMacro, type Action, type Binding, type ControlProfile, type MacroStep } from './bindings';
 
 const DEADZONE = 0.15;
 
-/** How hard each binding is pressed right now, 0..1. */
-export type BindingReader = (b: Binding) => number;
+/**
+ * How hard each binding is pressed right now, 0..1. `drive` asks for the
+ * drive-channel reading, where keys ramp up while held (see `keyLevel`).
+ */
+export type BindingReader = (b: Binding, drive?: boolean) => number;
+
+/** A key's drive level after being held `held` seconds: a quick tap is a gentle nudge. */
+export function keyLevel(held: number, ramp: number): number {
+  if (ramp <= 0) return 1;
+  return Math.min(1, KEY_START + (1 - KEY_START) * (held / ramp));
+}
+const KEY_START = 0.3;
 
 /**
  * The transmitter: read a profile's bindings (plus any running macro) and mix
  * them into per-side throttles, exactly as an RC transmitter's mixer would.
  */
 export function mixControls(profile: ControlProfile, read: BindingReader, macro: ReadonlySet<Action>): ControlState {
-  const level = (a: Action) => Math.max(macro.has(a) ? 1 : 0, ...profile.bindings[a].map(read));
+  const level = (a: Action) => Math.max(macro.has(a) ? 1 : 0, ...profile.bindings[a].map((b) => read(b)));
+  const drive = (a: Action) => Math.max(macro.has(a) ? 1 : 0, ...profile.bindings[a].map((b) => read(b, true)));
   let left: number, right: number;
   if (profile.mode === 'tank') {
-    left = level('leftForward') - level('leftBack');
-    right = level('rightForward') - level('rightBack');
+    left = drive('leftForward') - drive('leftBack');
+    right = drive('rightForward') - drive('rightBack');
   } else {
-    const throttle = level('forward') - level('back');
-    const turn = (level('right') - level('left')) * profile.turnRate;
+    const throttle = drive('forward') - drive('back');
+    const turn = (drive('right') - drive('left')) * profile.turnRate;
     left = throttle + turn;
     right = throttle - turn;
     const over = Math.max(1, Math.abs(left), Math.abs(right));
@@ -66,6 +77,9 @@ export class MacroRunner {
 /** Keyboard + gamepad state for the whole couch. */
 export class InputManager {
   private keys = new Set<string>();
+  /** Seconds each key has been held, for the drive ramp. */
+  private held = new Map<string, number>();
+  private ramp = 0.25;
   /** Keys that went down since the last poll, so a quick tap is never missed. */
   private tapped = new Set<string>();
   private pads: (Gamepad | null)[] = [];
@@ -115,8 +129,11 @@ export class InputManager {
     return p;
   }
 
-  read: BindingReader = (b) => {
-    if (b.device === 'key') return this.keys.has(b.code) || this.tapped.has(b.code) ? 1 : 0;
+  read: BindingReader = (b, drive = false) => {
+    if (b.device === 'key') {
+      if (!this.keys.has(b.code) && !this.tapped.has(b.code)) return 0;
+      return drive ? keyLevel(this.held.get(b.code) ?? 0, this.ramp) : 1;
+    }
     const pad = this.pads[b.pad];
     if (!pad) return 0;
     if (b.device === 'padButton') return pad.buttons[b.button]?.value ?? 0;
@@ -127,7 +144,10 @@ export class InputManager {
   poll(dtMs: number): ControlState[] {
     this.pads = navigator.getGamepads ? Array.from(navigator.getGamepads()) : [];
     if (this.capture) this.pollCapture();
+    for (const code of [...this.held.keys()]) if (!this.keys.has(code)) this.held.delete(code);
+    for (const code of this.keys) this.held.set(code, (this.held.get(code) ?? 0) + dtMs / 1000);
     const out = this.profiles.map((p, i) => {
+      this.ramp = p.keyRamp ?? DEFAULT_KEY_RAMP;
       this.runners[i].update(p, this.read, dtMs);
       return mixControls(p, this.read, this.runners[i].active);
     });

@@ -60,6 +60,26 @@ describe('house robots', () => {
     m.free();
   });
 
+  test("a house robot's attacks don't save a stuck robot from the count", () => {
+    // Wedgehog is jammed against the wall in Shovelhead's corner, wheels
+    // spinning. Shovelhead comes out and shoves it about, which mustn't
+    // count as Wedgehog moving under its own power.
+    const m = new Match([WEDGEHOG, WEDGEHOG], {
+      skipCountdown: true, house: [HOUSE_ROBOTS[2]],
+      spawns: spawnAt([5.5, 3.7, Math.PI / 2], [-3, -1, 0]),
+    });
+    const h = m.houseRobots[0];
+    const start = { ...h.position };
+    let moved = 0;
+    run(m, 22, () => [drive(1), drive(0.8, 0.3)], () => {
+      moved = Math.max(moved, Math.hypot(h.position.x - start.x, h.position.z - start.z));
+    });
+    expect(moved).toBeGreaterThan(0.3);
+    expect(m.eliminated[0]).toBe('immobilised');
+    expect(m.eliminated[1]).toBeNull();
+    m.free();
+  }, 60000);
+
   test('they never decide a fight', () => {
     const m = new Match([WEDGEHOG, TEMPLATES[1]], { skipCountdown: true, duration: 4, house: HOUSE_ROBOTS });
     run(m, 4.5, () => [drive(0.5, -0.5), drive(0.5, -0.5)]);

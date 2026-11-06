@@ -16,23 +16,45 @@ import { material } from '../data/materials';
  *   E_y    = YIELD_K × σ_yield(MPa) × t(mm)²      (elastic: shrugged off)
  *   damage = max(0, E − E_y) / (CAP_K × toughness × t(mm) × sizeFactor)
  *
- * A part's `condition` starts at 1 and the part fails at 0.
+ * A part's `condition` starts at 1 and the part fails at 0. Against the
+ * arena itself (floor, walls) the robot takes the whole impact. Internals also
+ * suffer from shock (see SHOCK), which is how flips and slams hurt robots.
  */
 export const DAMAGE = {
-  YIELD_K: 0.032,
+  YIELD_K: 0.02,
   CAP_K: 1000,
   /** Fraction of a panel hit passed to nearby internals, before armour absorbs some. */
   TRANSMIT: 0.6,
   /** Internals further than this from the hit (m) feel nothing. */
   TRANSMIT_RADIUS: 0.35,
   /** Motors, battery, gas system (J). */
-  COMPONENT_YIELD: 120,
+  COMPONENT_YIELD: 80,
   COMPONENT_CAP: 1500,
   /** Wheels and their mounts (J). */
-  WHEEL_YIELD: 350,
+  WHEEL_YIELD: 200,
   WHEEL_CAP: 2500,
   /** Contacts weaker than this (N) aren't reported by the physics engine at all. */
   EVENT_THRESHOLD: 600,
+};
+
+/**
+ * Shock: what a hard landing, a big flip or a full-speed slam into the wall
+ * does to the batteries, speed controllers and motors bolted inside. It goes
+ * on the chassis' change of velocity over a short window (gravity taken out,
+ * so free fall is nothing): below FREE m/s the internals don't care, above it
+ * each takes K × (Δv − FREE)² × its sensitivity.
+ */
+export const SHOCK = {
+  /** Window over which a jolt is measured, physics steps (~25 ms). */
+  WINDOW: 12,
+  FREE: 2.0,
+  K: 0.01,
+  battery: 1,
+  electronics: 1,
+  actuator: 0.6,
+  gasTank: 0.5,
+  flamethrower: 0.5,
+  ballast: 0,
 };
 
 export interface Toughness {

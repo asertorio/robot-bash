@@ -132,8 +132,10 @@ export function computeStats(d: RobotDesign): RobotStats {
       const w = lookup(WHEELS, part.wheel!, 'wheel');
       const m = lookup(MOTORS, act.motor, 'motor');
       const vr = voltage / m.voltage;
-      top = Math.min(top, ((m.freeSpeed * RPM_TO_RADS * vr) / act.gear) * w.radius * 0.92);
-      motorForce += (m.stallTorque * vr * act.gear * GEARBOX.efficiency) / w.radius;
+      // An input turned down (scale < 1) caps the speed controller's output.
+      const cap = Math.min(1, Math.abs(act.input.scale ?? 1));
+      top = Math.min(top, ((m.freeSpeed * RPM_TO_RADS * vr * cap) / act.gear) * w.radius * 0.92);
+      motorForce += (m.stallTorque * vr * cap * act.gear * GEARBOX.efficiency) / w.radius;
       amps += m.stallCurrent * vr;
       grip += w.grip;
     }
@@ -194,7 +196,8 @@ export function computeStats(d: RobotDesign): RobotStats {
         }
       }
       const energy = 0.5 * I * omega * omega;
-      const spinUp = stall > 0 ? (2.3 * I * omega) / stall : Infinity;
+      // A soft-start controller holds the torque back while it ramps.
+      const spinUp = stall > 0 ? Math.max((2.3 * I * omega) / stall, (act.softStart ?? 0) * 1.15) : Infinity;
       weapons.push({
         label: `${part.label} (${button})`, kind: act.input.mode === 'toggle' ? 'spinner' : 'motor', energy, maxRpm: omega / RPM_TO_RADS,
         lines: [`${fmt(omega / RPM_TO_RADS)} rpm · ${fmt(omega * radius)} m/s tip · ${fmt(energy / 1000, 1)} kJ stored`, `${fmt(spinUp, 1)} s to spin up`],

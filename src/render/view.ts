@@ -1,5 +1,7 @@
 import * as THREE from 'three';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { ARENA, arenaBoxes, flamePitRect } from '../sim/arena';
+import { partFrames, subtree } from '../sim/assembly';
 import type { Match } from '../sim/match';
 import type { Part, Robot } from '../sim/robot';
 import { MechanismView } from './mechanisms';
@@ -35,6 +37,12 @@ export class MatchView {
   private sparkData: Array<{ p: THREE.Vector3; v: THREE.Vector3; life: number }> = [];
   private sparkPositions = new Float32Array(600 * 3);
   private sparkColours = new Float32Array(600 * 3);
+  /** Garage: the move / rotate / resize handles on the selected part. */
+  private gizmo: TransformControls;
+  private gizmoTarget = new THREE.Object3D();
+  private gizmoState: GizmoState | null = null;
+  /** While a part is being dragged: how far its meshes are shown moved from where the physics has them. */
+  private preview: { ids: Set<string>; delta: THREE.Matrix4; scaleId: string; scale: THREE.Vector3 } | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -68,6 +76,140 @@ export class MatchView {
     this.resize();
     window.addEventListener('resize', () => this.resize());
     this.bindOrbit(canvas);
+
+    this.gizmo = new TransformControls(this.camera, canvas);
+    this.gizmo.setSize(0.85);
+    this.scene.add(this.gizmoTarget);
+    this.gizmo.attach(this.gizmoTarget);
+    const helper = this.gizmo.getHelper();
+    helper.visible = false;
+    this.gizmo.enabled = false;
+    this.scene.add(helper);
+    this.gizmo.addEventListener('mouseDown', () => this.gizmoStart());
+    this.gizmo.addEventListener('objectChange', () => this.gizmoMove());
+    this.gizmo.addEventListener('mouseUp', () => this.gizmoEnd());
+  }
+
+  /** Is the pointer on (or dragging) the part handles? Then a click isn't a pick. */
+  gizmoBusy(): boolean {
+    return this.gizmo.enabled && (this.gizmo.dragging || this.gizmo.axis !== null);
+  }
+
+  /**
+   * Show handles on one of robot 0's parts (garage), or hide them with null.
+   * The callbacks get the part's new pose in its parent's frame — the same
+   * numbers the design stores — and, for resizing, the scale per part axis.
+   */
+  setGizmo(opts: GizmoOptions | null) {
+    const helper = this.gizmo.getHelper();
+    if (!opts) {
+      this.gizmoState = null;
+      this.gizmo.enabled = false;
+      helper.visible = false;
+      return;
+    }
+    const same = this.gizmoState?.opts.partId === opts.partId;
+    this.gizmoState = { opts, start: null };
+    this.gizmo.enabled = true;
+    helper.visible = true;
+    this.gizmo.setMode(opts.mode);
+    this.gizmo.setSpace(opts.mode === 'translate' ? opts.space : 'local');
+    this.gizmo.setRotationSnap(opts.snap ? THREE.MathUtils.degToRad(5) : null);
+    this.gizmo.setScaleSnap(opts.snap ? 0.05 : null);
+    if (!same) this.placeGizmo();
+  }
+
+  /** World pose of a design part's frame (where its joint is), from the live physics. */
+  private framePose(id: string | null): { pos: THREE.Vector3; rot: THREE.Quaternion } | null {
+    const r = this.match?.robots[0];
+    if (!r) return null;
+    const frames = partFrames(r.design);
+    const rootId = r.design.parts.find((p) => p.parent === null)!.id;
+    const key = id ?? rootId;
+    const part = r.parts.find((p) => p.id === key);
+    const body = part?.body;
+    const f = frames.get(key);
+    if (!part || !body || !f) return null;
+    const origin = frames.get(part.bodyKey)?.pos ?? f.pos;
+    const bq = body.rotation(), bp = body.translation();
+    const rot = new THREE.Quaternion(bq.x, bq.y, bq.z, bq.w);
+    if (id === null) {
+      // The robot's own frame: the chassis' frame without the chassis' own pose.
+      const pos = new THREE.Vector3(-f.pos.x, -f.pos.y, -f.pos.z).applyQuaternion(rot).add(new THREE.Vector3(bp.x, bp.y, bp.z));
+      return { pos, rot };
+    }
+    const pos = new THREE.Vector3(f.pos.x - origin.x, f.pos.y - origin.y, f.pos.z - origin.z).applyQuaternion(rot).add(new THREE.Vector3(bp.x, bp.y, bp.z));
+    return { pos, rot: rot.multiply(new THREE.Quaternion(f.rot.x, f.rot.y, f.rot.z, f.rot.w)) };
+  }
+
+  private placeGizmo() {
+    const st = this.gizmoState;
+    if (!st || this.gizmo.dragging) return;
+    const pose = this.framePose(st.opts.partId);
+    if (!pose) return;
+    this.gizmoTarget.position.copy(pose.pos);
+    this.gizmoTarget.quaternion.copy(pose.rot);
+    this.gizmoTarget.scale.set(1, 1, 1);
+  }
+
+  private gizmoStart() {
+    const st = this.gizmoState;
+    const r = this.match?.robots[0];
+    if (!st || !r) return;
+    const def = r.design.parts.find((p) => p.id === st.opts.partId);
+    const parent = this.framePose(def?.parent ?? null);
+    if (!def || !parent) return;
+    st.start = { pos: this.gizmoTarget.position.clone(), rot: this.gizmoTarget.quaternion.clone(), parent };
+  }
+
+  private gizmoMove() {
+    const st = this.gizmoState;
+    if (!st?.start) return;
+    const t = this.gizmoTarget;
+    const { parent, pos: p0, rot: q0 } = st.start;
+    if (st.opts.mode === 'scale') {
+      t.scale.set(Math.max(0.05, Math.abs(t.scale.x)), Math.max(0.05, Math.abs(t.scale.y)), Math.max(0.05, Math.abs(t.scale.z)));
+      this.preview = { ids: new Set(), delta: new THREE.Matrix4(), scaleId: st.opts.partId, scale: t.scale.clone() };
+      st.opts.onResize?.([t.scale.x, t.scale.y, t.scale.z], false);
+      return;
+    }
+    // Into the parent's frame: those are the numbers the design keeps.
+    const inv = parent.rot.clone().invert();
+    const local = t.position.clone().sub(parent.pos).applyQuaternion(inv);
+    const grid = st.opts.snap ? 0.005 : 0.001;
+    local.set(snap(local.x, grid), snap(local.y, grid), snap(local.z, grid));
+    const e = new THREE.Euler().setFromQuaternion(inv.clone().multiply(t.quaternion), 'ZYX');
+    const step = st.opts.snap ? 5 : 1;
+    let deg: [number, number, number] = [e.x, e.y, e.z].map((a) => snap(THREE.MathUtils.radToDeg(a), step)) as [number, number, number];
+    // Moving shouldn't creep the angles through rounding, nor turning the position.
+    if (st.opts.mode === 'translate') deg = st.opts.rotation;
+    else local.set(...st.opts.position);
+    // Show the snapped pose, so the handles land where the part will.
+    const rq = new THREE.Quaternion().setFromEuler(new THREE.Euler(...deg.map((a) => THREE.MathUtils.degToRad(a)) as [number, number, number], 'ZYX'));
+    if (st.opts.mode === 'rotate') t.quaternion.copy(parent.rot).multiply(rq);
+    t.position.copy(local.clone().applyQuaternion(parent.rot).add(parent.pos));
+    // The whole sub-assembly moves with the part.
+    const r = this.match!.robots[0];
+    const from = new THREE.Matrix4().compose(p0, q0, new THREE.Vector3(1, 1, 1));
+    const to = new THREE.Matrix4().compose(t.position, t.quaternion, new THREE.Vector3(1, 1, 1));
+    this.preview = { ids: new Set(subtree(r.design, st.opts.partId)), delta: to.multiply(from.invert()), scaleId: '', scale: new THREE.Vector3(1, 1, 1) };
+    st.opts.onPose?.([local.x, local.y, local.z], deg, false);
+  }
+
+  private gizmoEnd() {
+    const st = this.gizmoState;
+    if (!st?.start) return;
+    st.start = null;
+    const t = this.gizmoTarget;
+    if (st.opts.mode === 'scale') {
+      const s: [number, number, number] = [t.scale.x, t.scale.y, t.scale.z];
+      t.scale.set(1, 1, 1);
+      if (s.some((v) => Math.abs(v - 1) > 1e-4)) st.opts.onResize?.(s, true);
+      else this.preview = null;
+      return;
+    }
+    if (!this.preview) return;
+    st.opts.onPose?.(null, null, true);
   }
 
   /** Drag to orbit and wheel to zoom, in follow mode. */
@@ -75,10 +217,13 @@ export class MatchView {
     let drag: { x: number; y: number } | null = null;
     canvas.addEventListener('pointerdown', (e) => {
       // Clicking the arena hands the keyboard back to the robots.
-      (document.activeElement as HTMLElement | null)?.blur?.(); if (this.cameraMode === 'follow') { drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); } });
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      if (this.cameraMode === 'follow' && !this.gizmoBusy()) { drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); }
+    });
     canvas.addEventListener('pointerup', () => (drag = null));
     canvas.addEventListener('pointermove', (e) => {
       if (!drag) return;
+      if (this.gizmo?.dragging) { drag = null; return; }
       this.orbit.yaw -= (e.clientX - drag.x) * 0.008;
       this.orbit.pitch = Math.min(1.4, Math.max(0.08, this.orbit.pitch + (e.clientY - drag.y) * 0.006));
       drag = { x: e.clientX, y: e.clientY };
@@ -206,8 +351,13 @@ export class MatchView {
     }
   }
 
-  setMatch(match: Match) {
+  /**
+   * Show a different match. `keepCamera` holds the camera where it is (the
+   * garage rebuilds the bay on every edit, and shouldn't swoop in each time).
+   */
+  setMatch(match: Match, keepCamera = false) {
     this.match = match;
+    this.preview = null;
     // The garage rebuilds the bay on every edit: free the old robots' GPU resources.
     this.robotGroup.traverse((o) => {
       const mesh = o as THREE.Mesh;
@@ -255,8 +405,14 @@ export class MatchView {
         this.blurDiscs.push({ robot: r, index, mesh: disc });
       });
     }
-    this.camTarget.set(0, 0, 0);
-    this.camPos.set(0, 12, 14);
+    if (!keepCamera) {
+      this.camTarget.set(0, 0, 0);
+      this.camPos.set(0, 12, 14);
+    }
+    if (this.gizmoState) {
+      this.gizmoState.start = null;
+      this.placeGizmo();
+    }
   }
 
   render(dt: number) {
@@ -270,6 +426,7 @@ export class MatchView {
       this.floorFlipper.quaternion.set(fq.x, fq.y, fq.z, fq.w);
       this.syncFlames(m, dt);
       this.updateCamera(m, dt);
+      this.placeGizmo();
     }
     this.renderer.render(this.scene, this.camera);
   }
@@ -286,6 +443,15 @@ export class MatchView {
       const q = new THREE.Quaternion(bq.x, bq.y, bq.z, bq.w);
       mesh.position.set(v.pos.x, v.pos.y, v.pos.z).applyQuaternion(q).add(new THREE.Vector3(bp.x, bp.y, bp.z));
       mesh.quaternion.copy(q).multiply(new THREE.Quaternion(v.rot.x, v.rot.y, v.rot.z, v.rot.w));
+      mesh.scale.set(1, 1, 1);
+      const pv = this.preview;
+      if (pv && part.def && m.robots[0].parts.includes(part)) {
+        if (pv.ids.has(part.id)) {
+          const mat = new THREE.Matrix4().compose(mesh.position, mesh.quaternion, mesh.scale).premultiply(pv.delta);
+          mat.decompose(mesh.position, mesh.quaternion, mesh.scale);
+        }
+        if (pv.scaleId === part.id) mesh.scale.copy(pv.scale);
+      }
       // Battle damage shows the way it would on the real thing: paint chipped
       // back to bare metal, gouges, and soot from the flame pit — never a bar.
       const p = mesh.position;
@@ -429,6 +595,30 @@ export class MatchView {
     return { x: (v.x * 0.5 + 0.5) * window.innerWidth, y: (-v.y * 0.5 + 0.5) * window.innerHeight };
   }
 }
+
+export interface GizmoOptions {
+  /** A part of robot 0. */
+  partId: string;
+  mode: 'translate' | 'rotate' | 'scale';
+  /** Moving along the world's axes or the part's own. */
+  space: 'world' | 'local';
+  /** 5 mm / 5° / 5% steps instead of 1 mm / 1°. */
+  snap: boolean;
+  /** The part's position and rotation as stored, so moving never nudges the angles (or turning the position). */
+  position: [number, number, number];
+  rotation: [number, number, number];
+  /** Position (m) and rotation (°) in the parent's frame while dragging; `done` with nulls when let go. */
+  onPose?: (pos: [number, number, number] | null, rotation: [number, number, number] | null, done: boolean) => void;
+  /** Scale along the part's X, Y, Z while dragging, and once more when let go. */
+  onResize?: (scale: [number, number, number], done: boolean) => void;
+}
+
+interface GizmoState {
+  opts: GizmoOptions;
+  start: { pos: THREE.Vector3; rot: THREE.Quaternion; parent: { pos: THREE.Vector3; rot: THREE.Quaternion } } | null;
+}
+
+const snap = (v: number, step: number) => Math.round(v / step) * step;
 
 /**
  * What shiny parts reflect: a dark studio with lighting rigs overhead and a

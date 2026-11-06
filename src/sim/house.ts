@@ -1,7 +1,7 @@
 import { ARENA } from './arena';
 import type { ControlState } from './control';
 import type { Robot } from './robot';
-import { steerTo, useWeapons } from './ai';
+import { WeaponOperator, steerTo } from './ai';
 import type { V3 } from './vmath';
 
 /** The corner patrol zone a house robot guards. */
@@ -27,16 +27,13 @@ export function inZone(z: Zone, p: V3, margin = 0): boolean {
  * who strays into it, and once a robot is counted out, everyone piles in.
  */
 export class HouseDriver {
-  private fireFor = 0;
-  private cooldown = 0;
-  private pressed = new Set<string>();
+  private arms = new WeaponOperator();
 
   constructor(readonly zone: Zone) {}
 
   /** `victims` are competitors that have been counted out and are fair game anywhere. */
   update(me: Robot, competitors: Robot[], victims: Robot[], dt: number): ControlState {
     const out: ControlState = { left: 0, right: 0, weapon: false, weapon2: false };
-    this.cooldown -= dt;
     const home = zoneCentre(this.zone);
     const intruders = competitors.filter((r) => inZone(this.zone, r.position, 0.3));
     const targets = [...intruders, ...victims];
@@ -47,10 +44,6 @@ export class HouseDriver {
       const s = steerTo(me, target.position, 0.75);
       out.left = s.left;
       out.right = s.right;
-      if (s.distance < 1.4 && Math.abs(s.bearing) < 0.5 && this.cooldown <= 0) {
-        this.fireFor = 1.4;
-        this.cooldown = 3;
-      }
     } else if (Math.hypot(home.x - me.position.x, home.z - me.position.z) > 0.35) {
       const s = steerTo(me, home, 0.5);
       out.left = s.left;
@@ -61,9 +54,7 @@ export class HouseDriver {
       if (Math.abs(s.bearing) > 0.3) { out.left = s.left * 0.4; out.right = s.right * 0.4; }
     }
 
-    // Lifters hold while the button is held; spinners just stay on.
-    if (this.fireFor > 0) this.fireFor -= dt;
-    useWeapons(me, out, this.fireFor > 0, this.pressed);
-    return out;
+    // Spinners stay on; lifters and the like go when they'd catch someone fair game.
+    return this.arms.update(me, targets, out, dt);
   }
 }

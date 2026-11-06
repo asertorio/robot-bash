@@ -3,7 +3,8 @@ import { EXAMPLES, ARACHNID, GYRODISC, ORB, TWIN_TERROR } from '../src/data/exam
 import { checkDesign, parseDesign } from '../src/data/garage';
 import { CRASH_TEST_DUMMY, FLIPSIDE, TEMPLATES } from '../src/data/templates';
 import { treeErrors } from '../src/sim/assembly';
-import { NEW_PART_KINDS, blankDesign, cloneDesign, mirrorPart, newParts, removePart, validParents } from '../src/sim/build';
+import { NEW_PART_KINDS, blankDesign, cloneDesign, mirrorPart, newParts, removePart, scaleShape, validParents } from '../src/sim/build';
+import { shapeHalf } from '../src/sim/shapes';
 import { Match } from '../src/sim/match';
 import { BUDGETS, WEIGHT_CLASSES, isLegal, scrutineer } from '../src/sim/rules';
 import { N, drive, run } from './helpers';
@@ -157,6 +158,41 @@ describe('test bay', () => {
     run(m, 16);
     expect(m.eliminated).toEqual([null, null]);
     expect(m.result).toBeNull();
+    m.free();
+  });
+});
+
+describe('resizing with the mouse', () => {
+  test.each([
+    ['box', { type: 'box', size: [0.2, 0.1, 0.3] }],
+    ['armour', { type: 'armour', size: [0.4, 0.2, 0.5], sides: 0.05, front: 0.02, rear: 0.1, belt: 0.5 }],
+    ['extrude (side)', { type: 'extrude', plane: 'side', depth: 0.1, outline: [[-0.1, -0.05], [0.1, -0.05], [0.1, 0.05], [-0.1, 0.05]] }],
+    ['extrude (top)', { type: 'extrude', plane: 'top', depth: 0.1, outline: [[-0.1, -0.05], [0.1, -0.05], [0.1, 0.05], [-0.1, 0.05]] }],
+    ['hull', { type: 'hull', points: [[-0.1, -0.1, -0.1], [0.1, -0.1, -0.1], [0, 0.1, 0], [0, -0.1, 0.1]] }],
+  ] as const)('%s stretches along the part axes it was pulled on', (_, shape) => {
+    const before = shapeHalf(shape as never);
+    const after = shapeHalf(scaleShape(shape as never, [2, 1, 0.5]));
+    expect(after.x).toBeCloseTo(before.x * 2, 3);
+    expect(after.y).toBeCloseTo(before.y, 3);
+    expect(after.z).toBeCloseTo(before.z * 0.5, 3);
+  });
+
+  test('round things stay round', () => {
+    const s = scaleShape({ type: 'cylinder', radius: 0.1, length: 0.2 }, [1.5, 2, 1.5]);
+    expect(s).toEqual({ type: 'cylinder', radius: 0.15, length: 0.4 });
+  });
+});
+
+describe('driving feel', () => {
+  test('a quick tap nudges Flipside instead of sending it across the arena', () => {
+    const m = new Match([FLIPSIDE], { skipCountdown: true, sandbox: true });
+    run(m, 0.5, () => [N]);
+    const p0 = { ...m.robots[0].position };
+    // Two frames of a freshly pressed key: about a third of full throttle.
+    run(m, 1.5, (t) => [t < 0.53 ? drive(0.35) : N]);
+    const p = m.robots[0].position;
+    expect(Math.hypot(p.x - p0.x, p.z - p0.z)).toBeLessThan(0.15);
+    expect(Math.hypot(m.robots[0].chassis.linvel().x, m.robots[0].chassis.linvel().z)).toBeLessThan(0.05);
     m.free();
   });
 });

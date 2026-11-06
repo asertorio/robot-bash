@@ -247,3 +247,31 @@ export function blankDesign(): RobotDesign {
 function round(v: number): number {
   return Math.round(v * 1000) / 1000;
 }
+
+/**
+ * Stretch a shape by `k` along the part's X, Y and Z (the garage's resize
+ * handles). Sizes are rounded to 0.5 mm; round things take the mean of their
+ * two round axes so they stay round.
+ */
+export function scaleShape(s: Shape, k: Vec3): Shape {
+  const [kx, ky, kz] = k;
+  const r = (v: number) => Math.max(0.0005, Math.round(v * 2000) / 2000);
+  const round = (kx + kz) / 2;
+  const size = (v: Vec3): Vec3 => [r(v[0] * kx), r(v[1] * ky), r(v[2] * kz)];
+  switch (s.type) {
+    case 'box': return { ...s, size: size(s.size) };
+    case 'wedge': return { ...s, size: size(s.size), lip: Math.max(0, r(s.lip * ky)) };
+    case 'armour': return { ...s, size: size(s.size), sides: r(s.sides * kx), front: r(s.front * kz), rear: r(s.rear * kz) };
+    case 'cylinder': case 'cone': return { ...s, radius: r(s.radius * round), length: r(s.length * ky) };
+    case 'capsule': return { ...s, radius: r(s.radius * round), length: Math.max(0, r(s.length * ky)) };
+    case 'sphere': return { ...s, radius: r(s.radius * Math.cbrt(kx * ky * kz)) };
+    case 'hull': return { ...s, points: s.points.map((p) => [p[0] * kx, p[1] * ky, p[2] * kz]) };
+    case 'lathe': return { ...s, profile: s.profile.map(([a, b]) => [a * round, b * ky]) };
+    case 'mesh': return { ...s, vertices: s.vertices.map((v, i) => v * k[i % 3]) };
+    case 'extrude': {
+      // Outline axes and extrusion direction for each drawing plane.
+      const [ku, kv, kd] = s.plane === 'side' ? [kz, ky, kx] : s.plane === 'front' ? [kx, ky, kz] : [kx, kz, ky];
+      return { ...s, outline: s.outline.map(([u, v]) => [u * ku, v * kv]), depth: r(s.depth * kd) };
+    }
+  }
+}
