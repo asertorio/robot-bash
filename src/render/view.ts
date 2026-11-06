@@ -215,20 +215,38 @@ export class MatchView {
   }
 
   /** Drag to orbit and wheel to zoom, in follow mode. */
+  /** Drag to orbit, wheel or pinch to zoom, in follow mode (the garage). */
   private bindOrbit(canvas: HTMLCanvasElement) {
-    let drag: { x: number; y: number } | null = null;
+    // Every finger (or the mouse) on the canvas, so two fingers can pinch.
+    const down = new Map<number, { x: number; y: number }>();
+    let pinch = 0;
+    const spread = () => { const [a, b] = [...down.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
     canvas.addEventListener('pointerdown', (e) => {
       // Clicking the arena hands the keyboard back to the robots.
       (document.activeElement as HTMLElement | null)?.blur?.();
-      if (this.cameraMode === 'follow' && !this.gizmoBusy()) { drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); }
+      if (this.cameraMode !== 'follow' || this.gizmoBusy()) return;
+      down.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      canvas.setPointerCapture(e.pointerId);
+      if (down.size === 2) pinch = spread();
     });
-    canvas.addEventListener('pointerup', () => (drag = null));
+    const up = (e: PointerEvent) => { down.delete(e.pointerId); pinch = down.size === 2 ? spread() : 0; };
+    canvas.addEventListener('pointerup', up);
+    canvas.addEventListener('pointercancel', up);
     canvas.addEventListener('pointermove', (e) => {
-      if (!drag) return;
-      if (this.gizmo?.dragging) { drag = null; return; }
-      this.orbit.yaw -= (e.clientX - drag.x) * 0.008;
-      this.orbit.pitch = Math.min(1.4, Math.max(0.08, this.orbit.pitch + (e.clientY - drag.y) * 0.006));
-      drag = { x: e.clientX, y: e.clientY };
+      const was = down.get(e.pointerId);
+      if (!was) return;
+      if (this.gizmo?.dragging) { down.clear(); return; }
+      const now = { x: e.clientX, y: e.clientY };
+      down.set(e.pointerId, now);
+      if (down.size >= 2) {
+        // Pinch: fingers apart zooms in.
+        const d = spread();
+        if (pinch > 0 && d > 0) this.orbit.dist = Math.min(12, Math.max(1.2, this.orbit.dist * (pinch / d)));
+        pinch = d;
+        return;
+      }
+      this.orbit.yaw -= (now.x - was.x) * 0.008;
+      this.orbit.pitch = Math.min(1.4, Math.max(0.08, this.orbit.pitch + (now.y - was.y) * 0.006));
     });
     canvas.addEventListener('wheel', (e) => {
       if (this.cameraMode !== 'follow') return;

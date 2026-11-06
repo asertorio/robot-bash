@@ -8,8 +8,8 @@ landings shake batteries and speed controllers loose, and a robot loses
 because something actually broke.
 
 **[Play it in your browser](https://asertorio.github.io/robot-bash/)** — no
-install, keyboard or gamepad, two players on one machine or you against the
-CPU.
+install. Keyboard, gamepad or touch screen; two players on one machine, or you
+against the CPU.
 
 **Status: v0.7.** Fights in a hazard-filled arena, nineteen starter robots
 plus eight house robots to pick from, a CPU opponent that uses its weapons
@@ -40,6 +40,12 @@ the keyboard (`Tab`, `Enter`, `Space`) or a gamepad (D-pad to move, A to
 pick, B to go back, Start to fight). `Tab` in a fight cycles the damage display: a small plan view of each
 robot with every part coloured by health, that plus the full damage report,
 or nothing. Each player's panel also shows battery, gas and fuel gauges.
+
+**On a phone or tablet**, turn it sideways: a thumb-stick bottom left drives
+(gently near the middle, full power at the edge) and the robot's weapon
+buttons sit bottom right, labelled with what they do. Tap the damage label at
+the top to cycle the display. In the garage, tap **Hide panels** to test-drive
+with the same controls, and pinch to zoom.
 
 Drive keys ramp up to full power over a quarter of a second, so a quick tap is
 a small nudge, and the speed controllers brake when you let go. Everything can
