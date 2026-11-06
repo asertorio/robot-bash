@@ -89,7 +89,8 @@ and the key ramp, and write macros such as `weapon 150, back+left 300`.
 
 - **Materials have a hardness.** A hardened-steel tooth bites about three
   times deeper into aluminium than into hardened steel; an aluminium tooth
-  barely marks hardened steel. Robot on robot, the softer side takes more.
+  barely marks hardened steel. Tyres are tough rubber, so they don't count as
+  soft: a spinner won't take a wheel off with one glancing hit.
 - **Edges matter:** every part is blunt (plate, wedges), a blade (spinner
   teeth), a spike (axe heads, lances, crusher beaks) or a saw.
 - **Saws and chainsaws cut as they slide**, from how hard they're pressed in

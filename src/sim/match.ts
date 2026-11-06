@@ -4,7 +4,7 @@ import { ARENA, Arena, flamePitRect, floorFlipperRect, inRect } from './arena';
 import { NEUTRAL, type ControlState } from './control';
 import type { RobotDesign } from './design';
 import { HOUSE_CORNERS, HouseDriver, zoneCentre } from './house';
-import { CUT, PIERCE, cutRatio, edgeFactor, impactShare, pierceForce } from './damage';
+import { CUT, PIERCE, cutRatio, hitShare, pierceForce } from './damage';
 import { Robot, type Part } from './robot';
 import { vadd, vcross, vdot, vlen, vscale, vsub, type V3 } from './vmath';
 
@@ -297,14 +297,14 @@ export class Match {
         ep = { energy: 0, start: this.time, last: this.time };
         this.episodes.set(key, ep);
       }
-      // Robot on robot, the softer side soaks up more, and a sharp edge
-      // concentrates the blow (see EDGE in damage.ts). Against the arena (a
+      // Robot on robot, a sharp or harder edge concentrates the blow on
+      // the other side (see EDGE in damage.ts). Against the arena (a
       // massive steel structure) the robot is what gives, so it takes it all.
       let share1 = 1, share2 = 1;
       if (owner1 && owner2) {
         const p1 = owner1.part, p2 = owner2.part;
-        share1 = impactShare(p1.material, p2.material) * edgeFactor(p2.edge, p2.material, p1.material);
-        share2 = impactShare(p2.material, p1.material) * edgeFactor(p1.edge, p1.material, p2.material);
+        share1 = hitShare(p2, p1);
+        share2 = hitShare(p1, p2);
       }
       const prior1 = ep.energy * share1, prior2 = ep.energy * share2;
       const before = ep.energy;
@@ -352,13 +352,16 @@ export class Match {
     if (a.edge === 'saw') {
       const speed = slide + att.robot.chainRunning(a);
       if (speed > 1.5) {
-        const ratio = Math.min(d.kind === 'wheel' ? 4 : CUT.MAX_RATIO, cutRatio(a.material, d.material));
+        // Tyres and internals: no hardness bonus (see hitShare).
+        const ratio = d.kind === 'structure' ? cutRatio(a.material, d.material) : 1;
         const power = CUT.K * force * speed * ratio;
         loss = def.robot.cut(d, (power * STEP) / d.toughness.capacity, point);
         verb = ratio < 0.6 ? 'skating off' : ratio > 2.5 ? 'slicing through' : 'cutting into';
         if (loss > 0 && Math.random() < 0.25 && this.impacts.length < 64) this.impacts.push({ point, energy: 60 + Math.min(600, power / 20) });
       }
-    } else if (a.edge === 'spike') {
+    } else if (a.edge === 'spike' && d.kind === 'structure') {
+      // Plate only: a tyre just deforms round a point, and internals are
+      // reached through the plate in front of them.
       const fp = pierceForce(d.material, d.thickness);
       if (force > fp) {
         const over = Math.min(PIERCE.MAX_OVERLOAD, force / fp - 1);
