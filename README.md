@@ -2,8 +2,8 @@
 
 A physics-simulated robot combat game in the spirit of the British TV show
 *Robot Wars*. Robots are built from real parts (motors, gearboxes, batteries,
-armour plate, pneumatic rams, spinner blades) and every hit is worked out from
-real forces. There are no hit points: armour dents and tears off, hard
+armour plate, pneumatic and hydraulic rams, spinner blades, chainsaws) and
+every hit is worked out from real forces and real materials. There are no hit points: armour dents and tears off, hard
 landings shake batteries and speed controllers loose, and a robot loses
 because something actually broke.
 
@@ -11,8 +11,8 @@ because something actually broke.
 install, keyboard or gamepad, two players on one machine or you against the
 CPU.
 
-**Status: v0.6.** Fights in a hazard-filled arena, thirteen starter robots
-plus four house robots to pick from, a CPU opponent that uses its weapons
+**Status: v0.7.** Fights in a hazard-filled arena, nineteen starter robots
+plus eight house robots to pick from, a CPU opponent that uses its weapons
 properly, and the **Garage**, where you build anything out of parts, joints
 and actuators and drive it in a test bay. Tournaments come next. See [docs/DESIGN.md](docs/DESIGN.md) for how the simulation works and
 the roadmap.
@@ -65,9 +65,33 @@ and the key ramp, and write macros such as `weapon 150, back+left 300`.
 - **Floor flipper:** park on the striped panel and it throws you into the air.
 - **Flame pit:** the grille burns on a cycle. Tyres and plastic armour cook
   fast, steel barely notices, internals behind armour get some of the heat.
-- **House robots** (0, 2 or 4, chosen on the select screen) guard the corner
-  patrol zones and attack anything that strays in. Once a robot is being
-  counted out, they come out to finish it off.
+- **House robots** (0, 1, 2 or 4, chosen on the select screen) guard the
+  corner patrol zones and attack anything that strays in. Once a robot is
+  being counted out, they come out to finish it off. Pick the classic set, an
+  **overpowered** set, or a mix.
+- **Referee breaks:** two robots shoving nose to nose and going nowhere for 5
+  seconds get pulled apart. Robots also slide and bounce off each other the
+  way bare plate does, so evenly matched robots come round for another go
+  instead of mashing.
+- **Finale:** in the last 30 seconds the pit opens and the house robots come
+  for everyone.
+- **Big hits** get a shout, camera shake and a moment of slow motion.
+- **Settings** (main menu): Realistic or Brutal damage, fight length, finale,
+  referee breaks, house robot set, slow motion and camera shake.
+
+## What hits do
+
+- **Materials have a hardness.** A hardened-steel tooth bites about three
+  times deeper into aluminium than into hardened steel; an aluminium tooth
+  barely marks hardened steel. Robot on robot, the softer side takes more.
+- **Edges matter:** every part is blunt (plate, wedges), a blade (spinner
+  teeth), a spike (axe heads, lances, crusher beaks) or a saw.
+- **Saws and chainsaws cut as they slide**, from how hard they're pressed in
+  and how fast the teeth move. Held on mild steel, a chainsaw is through it in
+  seconds; hardened steel takes several times longer.
+- **Crushers and spikes pierce under steady force** once they push past what
+  the plate can take (about 4 kN for 6 mm aluminium, 19 kN for 6 mm hardened
+  steel). Hydraulic crushers have no gas to run out of.
 
 ## The robots
 
@@ -89,11 +113,21 @@ listed too.
 | Lancer | Ram spike that punches out of the nose | 59 kg |
 | Sawtooth | Vertical disc spinner, 2,500 rpm | 97 kg |
 | Hoister | Wide lifting forks on a slow, strong ram | 88 kg |
+| Brickhouse | None — invertible rammer, wheels inside the body | 76 kg |
+| Lumberjack | Chainsaw on a powered arm | 77 kg |
+| Clampdown | Clamp-lifter: grabs, lifts and carries | 97 kg |
+| Tailspin | Thwackbot: spins to swing a spiked mace on a tail | 56 kg |
+| Gemini | Twin counter-rotating saw discs | 76 kg |
+| Vicegrip | Hydraulic crusher, no gas, unlimited bites | 86 kg |
 
 **House robots**, far over the competitor limits and also selectable:
 **Ironjaw** (a 254 kg lifter on a 50-bar ram), **Buzzard** (a vertical
 circular saw), **Shovelhead** (a 269 kg bulldozer) and **Thresher** (a
-horizontal bar spinning at head height).
+horizontal bar spinning at head height). The **overpowered** set:
+**Maelstrom** (a 1.3 m steel full-body spinner), **Pile Driver** (a 125 kN
+hydraulic spike that goes through hardened steel), **Warden** (a giant
+clamp-lifter that carries you to the pit) and **Inferno** (twin flamethrowers
+and a flipper that throws heavyweights out of the arena).
 
 ## The Garage
 

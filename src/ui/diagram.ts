@@ -108,7 +108,7 @@ export class RobotDiagram {
 
 /** Shots of gas left, at the average shot size of the robot's rams. */
 export function shotsLeft(r: Robot): number {
-  const pneu = r.actuators.filter((a) => a.def.type === 'pneumatic');
+  const pneu = r.actuators.filter((a) => a.def.type === 'pneumatic' && !a.ram?.hydraulic);
   const per = pneu.length ? pneu.reduce((t, a) => t + a.gasPerShot, 0) / pneu.length : 1;
   return Math.floor(r.gasLeft / per);
 }

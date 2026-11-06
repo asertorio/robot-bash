@@ -1,7 +1,7 @@
 import { deleteDesign, loadDesigns, parseDesign, saveDesign } from '../data/garage';
 import { MATERIALS, type Material } from '../data/materials';
 import { BATTERIES, MOTORS, RAMS, TANKS, VALVES, WHEELS, type BatterySpec, type MotorSpec, type RamSpec, type TankSpec, type ValveSpec, type WheelSpec } from '../data/parts';
-import { HOUSE_ROBOTS } from '../data/house';
+import { HOUSE_ROBOTS, MONSTER_HOUSE } from '../data/house';
 import { TEMPLATES } from '../data/templates';
 import { actuatorOf, childrenOf, partMass, registerCatalog, root } from '../sim/assembly';
 import { convexPieces, shapeHalf } from '../sim/shapes';
@@ -9,7 +9,7 @@ import { importModel } from './importModel';
 import { OUTLINE_PRESETS, PROFILE_PRESETS, sketchEditor } from './sketch';
 import { NEW_PART_KINDS, blankDesign, cloneDesign, mirrorPart, newParts, removePart, scaleShape, validParents, type NewPartKind } from '../sim/build';
 import { conditionLabel } from '../sim/damage';
-import type { ActuatorDef, CustomCatalog, InputDef, InputSource, JointDef, PartDef, RobotDesign, Shape, Vec3 } from '../sim/design';
+import type { ActuatorDef, EdgeKind, CustomCatalog, InputDef, InputSource, JointDef, PartDef, RobotDesign, Shape, Vec3 } from '../sim/design';
 import type { Match } from '../sim/match';
 import type { GizmoOptions } from '../render/view';
 import { BUDGETS, DEFAULT_RULES, WEIGHT_CLASSES, isLegal, scrutineer, type Rules } from '../sim/rules';
@@ -41,7 +41,7 @@ export interface GarageHost {
   onPick(cb: (partId: string | null) => void): void;
 }
 
-const TEMPLATE_IDS = new Set([...TEMPLATES, ...HOUSE_ROBOTS].map((t) => t.id));
+const TEMPLATE_IDS = new Set([...TEMPLATES, ...HOUSE_ROBOTS, ...MONSTER_HOUSE].map((t) => t.id));
 const fmt = (v: number, d = 0) => v.toLocaleString('en-GB', { minimumFractionDigits: d, maximumFractionDigits: d });
 
 /**
@@ -283,7 +283,7 @@ export class Garage {
     if (TEMPLATE_IDS.has(this.draft.id)) {
       // Never overwrite a starter robot: saving makes it yours.
       this.draft.id = `custom-${Date.now().toString(36)}`;
-      if ([...TEMPLATES, ...HOUSE_ROBOTS].some((t) => t.name === this.draft.name)) this.draft.name = `${this.draft.name} Mk II`;
+      if ([...TEMPLATES, ...HOUSE_ROBOTS, ...MONSTER_HOUSE].some((t) => t.name === this.draft.name)) this.draft.name = `${this.draft.name} Mk II`;
     }
     saveDesign(cloneDesign(this.draft));
     const legal = isLegal(scrutineer(this.draft, this.rules));
@@ -364,7 +364,7 @@ export class Garage {
         h('button', { class: 'small', onclick: () => this.confirmLoad(blankDesign()) }, 'Blank chassis')),
       h('h4', {}, 'House robots'),
       h('div', { class: 'hint' }, 'See how the arena\'s heavies are built, or make your own. They\'re far over the competitor limits — set the weight class to Open to pass scrutineering.'),
-      h('div', { class: 'chips' }, ...HOUSE_ROBOTS.map((t) => h('button', { class: 'small', onclick: () => this.confirmLoad(t) }, t.name))),
+      h('div', { class: 'chips' }, ...[...HOUSE_ROBOTS, ...MONSTER_HOUSE].map((t) => h('button', { class: 'small', onclick: () => this.confirmLoad(t) }, t.name))),
       h('h4', {}, 'My robots'),
       saved.length
         ? h('div', { class: 'saved' }, ...saved.map((s) => h('div', { class: 'saved-row' },
@@ -545,6 +545,26 @@ export class Garage {
     out.push(...this.catalogSel('Material', 'materials', p.material ?? 'aluminium', (v) => (p.material = v), (m: Material) => `${m.name} — ${m.density} kg/m³, £${m.costPerKg}/kg`));
     out.push(this.sel('Construction', [['shell', 'Hollow shell (plate)'], ['solid', 'Solid']], p.wall ? 'shell' : 'solid', (v) => { if (v === 'solid') delete p.wall; else p.wall = 5; }, true));
     if (p.wall) out.push(this.num('Wall thickness', p.wall, (v) => (p.wall = v), { min: 0.5, max: 50, step: 0.5, unit: 'mm', floor: 0.1 }));
+    const edges: Array<[EdgeKind | 'auto', string]> = [['auto', 'Automatic'], ['blunt', 'Blunt (plate, wedge)'], ['blade', 'Blade / tooth'], ['spike', 'Spike / point'], ['saw', 'Saw teeth']];
+    out.push(this.sel('Edge', edges, p.edge ?? 'auto', (v) => { if (v === 'auto') delete p.edge; else p.edge = v; if (v !== 'saw') delete p.chain; }, true));
+    out.push(h('div', { class: 'hint' }, {
+      auto: 'Hard-metal parts of a spinning weapon count as teeth; anything else is blunt.',
+      blunt: 'Dents what it hits. Harder dents softer.',
+      blade: 'Hits bite deeper — far deeper into anything softer than it.',
+      spike: 'Hits punch through, and it pierces under steady force once it pushes hard enough (crushers, lances).',
+      saw: 'Cuts as it slides: spin it, or fit a chain. Eats soft materials, struggles with hardened steel.',
+    }[p.edge ?? 'auto']));
+    if (p.edge === 'saw') {
+      out.push(this.sel('Chain', [['none', 'No chain (a spinning saw)'], ['chain', 'Chainsaw chain']], p.chain ? 'chain' : 'none', (v) => {
+        if (v === 'none') delete p.chain;
+        else p.chain = { input: { source: 'button2', mode: 'toggle' }, speed: 20 };
+      }, true));
+      if (p.chain) {
+        const ch = p.chain;
+        out.push(this.num('Chain speed', ch.speed, (v) => (ch.speed = v), { min: 2, max: 40, step: 1, unit: 'm/s', floor: 0 }));
+        out.push(...this.inputFields({ type: 'motor', motor: 'wm400', gear: 1, input: ch.input }));
+      }
+    }
     return out;
   }
 

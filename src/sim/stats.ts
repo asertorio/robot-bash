@@ -173,10 +173,12 @@ export function computeStats(d: RobotDesign): RobotStats {
       const force = pressure * 1e5 * area;
       const energy = force * (ram.stroke / 1000);
       const perShot = gasDensity(pressure) * area * (ram.stroke / 1000) * 1000;
-      const shots = Math.floor(gasCapacity / perShot);
+      const shots = ram.hydraulic ? undefined : Math.floor(gasCapacity / perShot);
+      if (ram.hydraulic) amps += (ram.pumpCurrent ?? 60) * 0.25;
       weapons.push({
         label: `${part.label} (${button})`, kind: 'pneumatic', energy, shots,
-        lines: [`${fmt(force / 1000, 1)} kN ram at ${pressure} bar${part.joint.type === 'hinge' ? ` · ${fmt(force * act.leverArm)} N·m` : ''}`, `${fmt(energy / 1000, 1)} kJ per shot · ${shots} shots of gas`],
+        lines: [`${fmt(force / 1000, 1)} kN ${ram.hydraulic ? 'hydraulic cylinder' : 'ram'} at ${pressure} bar${part.joint.type === 'hinge' ? ` · ${fmt(force * act.leverArm)} N·m` : ''}`,
+          ram.hydraulic ? `pump-driven: no gas to run out of · ${ram.pumpCurrent ?? 60} A while working` : `${fmt(energy / 1000, 1)} kJ per shot · ${shots} shots of gas`],
       });
     } else if (act.type === 'motor') {
       const m = lookup(MOTORS, act.motor, 'motor');
@@ -209,6 +211,11 @@ export function computeStats(d: RobotDesign): RobotStats {
     }
   }
   for (const p of d.parts) {
+    if (!p.chain) continue;
+    amps += 45 * 0.5;
+    weapons.push({ label: `${p.label} (${p.chain.input.source.replace('button', 'button ')})`, kind: 'motor', energy: 0, lines: [`chainsaw · chain at ${fmt(p.chain.speed)} m/s · ${p.material ? MATERIAL_NAME(p.material) : ''} teeth`] });
+  }
+  for (const p of d.parts) {
     const c = p.component;
     if (c?.type !== 'flamethrower') continue;
     weapons.push({ label: `${p.label} (${c.input.source.replace('button', 'button ')})`, kind: 'motor', energy: 0, lines: [`flamethrower · ${fmt(c.range, 1)} m reach · ${fmt(c.fuel / 0.06)} s of fuel`] });
@@ -220,6 +227,8 @@ export function computeStats(d: RobotDesign): RobotStats {
     rebuildCost: cost, rebuildMinutes: bom.reduce((s, l) => s + l.swapMinutes, 0), hardestSpare, bom,
   };
 }
+
+const MATERIAL_NAME = (id: string): string => { try { return material(id).name.toLowerCase(); } catch { return id; } };
 
 const fmt = (v: number, d = 0) => v.toLocaleString('en-GB', { minimumFractionDigits: d, maximumFractionDigits: d });
 

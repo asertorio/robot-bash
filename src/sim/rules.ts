@@ -107,7 +107,9 @@ export function scrutineer(d: RobotDesign, rules: Rules = DEFAULT_RULES, stats?:
       if (a.targets.some((t) => t < lo - 0.5 || t > hi + 0.5)) warn(`${p.label}: servo targets go beyond the hinge limits.`);
     }
   }
-  if (acts.some(({ a }) => a.type === 'pneumatic') && !d.parts.some((p) => p.component?.type === 'gasTank')) err('Pneumatics fitted but no gas bottle to run them.');
+  const needsGas = acts.some(({ a }) => a.type === 'pneumatic' && !lookup(RAMS, a.ram, 'ram').hydraulic);
+  if (needsGas && !d.parts.some((p) => p.component?.type === 'gasTank')) err('Pneumatics fitted but no gas bottle to run them.');
+  for (const p of d.parts) if (p.chain && p.edge !== 'saw') warn(`${p.label}: a chain only cuts on a part with a saw edge.`);
   if (!acts.some(({ a }) => isLocomotion(a))) warn("Nothing is wired to the drive controls: it can't move itself and will be counted out.");
   if (stats.runtime < FIGHT_LENGTH) warn(`The battery may go flat before a 3-minute fight ends (~${(stats.runtime / 60).toFixed(1)} min).`);
   if (stats.pushLimit === 'battery') warn('The battery can\'t supply full current to the drive: pushing power is battery-limited.');

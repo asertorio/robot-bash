@@ -250,3 +250,15 @@ textarea.json { width: 100%; background: #0d0f13; color: var(--muted); border: 1
 }
 .chip.clash { border-color: var(--warn); }
 .chip .clash-note { color: var(--warn); }
+
+/* Big-hit shout: smaller than the countdown, and it punches in. */
+.hud .big.flash { font-size: clamp(34px, 7vw, 84px); color: #fff; text-shadow: 0 0 24px var(--hazard), 0 6px 30px rgba(0,0,0,0.9); animation: punch 0.35s ease-out; }
+@keyframes punch { from { transform: scale(1.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+/* Settings screen */
+.settings { display: grid; gap: 14px; max-width: 720px; width: 100%; margin: 0 auto; }
+.setting { display: grid; grid-template-columns: 160px auto; align-items: center; gap: 6px 16px; background: var(--panel); padding: 12px 16px; border-radius: 4px; }
+.setting .slabel { font-family: var(--display); text-transform: uppercase; letter-spacing: 0.06em; }
+.setting .seg { justify-self: start; flex-wrap: wrap; }
+.setting .hint { grid-column: 1 / -1; margin: 0; }
+@media (max-width: 560px) { .setting { grid-template-columns: 1fr; } }

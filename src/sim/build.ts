@@ -1,5 +1,6 @@
 import { WHEELS, lookup } from '../data/parts';
 import { actuatorOf, designBounds, partFrames, root, subtree } from './assembly';
+import { chainsawBar } from '../data/arsenal';
 import type { ActuatorDef, InputDef, PartDef, RobotDesign, Shape, Vec3 } from './design';
 import { qconj, qrotate, vsub } from './vmath';
 
@@ -24,7 +25,7 @@ export type NewPartKind =
   | 'box' | 'armour' | 'wedge' | 'cylinder' | 'cone' | 'sphere' | 'capsule' | 'plate' | 'bar'
   | 'wheel' | 'battery' | 'gasTank' | 'ballast'
   | 'flipper' | 'spinner' | 'lifter' | 'axe' | 'spike' | 'leg'
-  | 'outline' | 'lathe' | 'model' | 'flail' | 'flamethrower' | 'suspensionWheel' | 'crusher';
+  | 'outline' | 'lathe' | 'model' | 'flail' | 'flamethrower' | 'suspensionWheel' | 'crusher' | 'hydraulicCrusher' | 'chainsaw';
 
 export const NEW_PART_KINDS: Array<[NewPartKind, string, string]> = [
   ['outline', 'Drawn outline — any 2D shape, extruded', 'Shapes'], ['lathe', 'Drawn profile — spun into a drum, dome…', 'Shapes'], ['model', 'Imported 3D model (STL / OBJ)', 'Shapes'],
@@ -33,7 +34,7 @@ export const NEW_PART_KINDS: Array<[NewPartKind, string, string]> = [
   ['wheel', 'Driven wheel', 'Drive'], ['suspensionWheel', 'Driven wheel on sprung suspension', 'Drive'], ['leg', 'Walking leg (hip + knee servos)', 'Drive'],
   ['flipper', 'Flipper (ram on a hinge)', 'Weapons'], ['lifter', 'Lifter (slow ram)', 'Weapons'], ['axe', 'Axe / hammer (ram)', 'Weapons'],
   ['spinner', 'Spinner (motor on a hinge)', 'Weapons'], ['spike', 'Ram spike (slider)', 'Weapons'],
-  ['crusher', 'Crusher jaw (ram, pivots down)', 'Weapons'], ['flail', 'Flail (chain and ball)', 'Weapons'], ['flamethrower', 'Flamethrower (banned — Open class)', 'Weapons'],
+  ['crusher', 'Crusher jaw (ram, pivots down)', 'Weapons'], ['hydraulicCrusher', 'Hydraulic crusher (pump-driven, no gas)', 'Weapons'], ['chainsaw', 'Chainsaw on a servo arm', 'Weapons'], ['flail', 'Flail (chain and ball)', 'Weapons'], ['flamethrower', 'Flamethrower (banned — Open class)', 'Weapons'],
   ['battery', 'Battery', 'Internals'], ['gasTank', 'Gas bottle', 'Internals'], ['ballast', 'Ballast weight', 'Internals'],
 ];
 
@@ -109,10 +110,12 @@ export function newParts(d: RobotDesign, kind: NewPartKind, parentId = root(d).i
       const arm = shapePart(d, parentId, 'Axe arm', { type: 'box', size: [0.04, 0.04, 0.5] }, at.top, { shapeOffset: [0, 0, -0.25], rotation: [0, 0, 0], material: 'aluminium' });
       arm.joint = { type: 'hinge', axis: [1, 0, 0], limits: [-5, 200], actuator: { type: 'pneumatic', ram: 'ram63', valve: 'dump', pressure: 20, leverArm: 0.08, input: btn(nextButton()) } };
       const head = shapePart(d, arm.id, 'Axe head', { type: 'wedge', size: [0.03, 0.12, 0.1], lip: 0 }, [0, -0.04, -0.5], { rotation: [90, 0, 0], material: 'hardox' });
+      head.edge = 'spike';
       return [arm, head];
     }
     case 'spike': {
       const spike = shapePart(d, parentId, 'Spike', { type: 'cone', radius: 0.03, length: 0.25 }, at.front, { rotation: [90, 0, 0], material: 'hardox' });
+      spike.edge = 'spike';
       spike.joint = { type: 'slider', axis: [0, 1, 0], limits: [0, 150], actuator: { type: 'pneumatic', ram: 'ram40', valve: 'dump', pressure: 20, leverArm: 0, input: btn(nextButton()) } };
       return [spike];
     }
@@ -132,7 +135,23 @@ export function newParts(d: RobotDesign, kind: NewPartKind, parentId = root(d).i
       const jaw = shapePart(d, parentId, 'Crusher jaw', { type: 'extrude', plane: 'side', depth: 0.06, outline: [[0, -0.02], [0.45, -0.02], [0.5, -0.12], [0.44, -0.12], [0.4, 0.02], [0, 0.03]] }, at.top, { material: 'hardox' });
       jaw.joint = { type: 'hinge', axis: [1, 0, 0], limits: [-15, 70], actuator: { type: 'pneumatic', ram: 'ram80', valve: 'std', pressure: 22, leverArm: 0.1, input: btn(nextButton()) } };
       jaw.rotation = [-60, 0, 0];
+      jaw.edge = 'spike';
       return [jaw];
+    }
+    case 'hydraulicCrusher': {
+      const jaw = shapePart(d, parentId, 'Hydraulic crusher', { type: 'extrude', plane: 'side', depth: 0.06, outline: [[0, -0.02], [0.4, -0.02], [0.45, -0.14], [0.39, -0.14], [0.35, 0.02], [0, 0.03]] }, at.top, { material: 'hardox', edge: 'spike' });
+      jaw.joint = { type: 'hinge', axis: [1, 0, 0], limits: [-15, 65], actuator: { type: 'pneumatic', ram: 'hyd50', valve: 'spool', pressure: 150, leverArm: 0.1, input: btn(nextButton()) } };
+      jaw.rotation = [-50, 0, 0];
+      return [jaw];
+    }
+    case 'chainsaw': {
+      const arm = shapePart(d, parentId, 'Saw arm', { type: 'box', size: [0.05, 0.05, 0.45] }, at.top, { shapeOffset: [0, 0, 0.225], rotation: [-30, 0, 0], material: 'mildSteel', wall: 4 });
+      const n = nextButton();
+      arm.joint = { type: 'hinge', axis: [1, 0, 0], limits: [-5, 60], actuator: { type: 'servo', motor: 'dm750', gear: 100, targets: [0, 0, 55], input: btn(n) } };
+      d = { ...d, parts: [...d.parts, arm] };
+      const bar = shapePart(d, arm.id, 'Chainsaw bar', chainsawBar(0.4, 0.08), [0, 0, 0.43], { rotation: [12, 0, 0], material: 'hardox', edge: 'saw' });
+      bar.chain = { input: btn(Math.min(4, n + 1), 'toggle'), speed: 20 };
+      return [arm, bar];
     }
     case 'flail': {
       // A robot's own parts don't collide with each other, so the chain hangs

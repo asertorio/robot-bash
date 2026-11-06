@@ -1,4 +1,5 @@
-import { material } from '../data/materials';
+import { hardnessOf, material } from '../data/materials';
+import type { EdgeKind } from './design';
 
 /**
  * Damage tuning. Everything that turns a contact into part damage lives here
@@ -56,6 +57,74 @@ export const SHOCK = {
   flamethrower: 0.5,
   ballast: 0,
 };
+
+/**
+ * Edges and hardness. Robot on robot, the softer side soaks up more of an
+ * impact, and a sharp edge concentrates it: the defender's share is
+ * multiplied by EDGE[kind] × (H_attacker / H_defender)^HARDNESS_EXP, clamped.
+ * So a hardened tooth (500 HB) on aluminium (95 HB) bites about three times as
+ * deep as it would into hardened steel, and an aluminium tooth barely marks
+ * hardened steel at all.
+ */
+export const EDGE = {
+  /** Impact multiplier per edge kind, at equal hardness. */
+  factor: { blunt: 1, blade: 1.6, spike: 2.2, saw: 1.3 } as Record<EdgeKind, number>,
+  HARDNESS_EXP: { blunt: 0.25, blade: 0.65, spike: 0.65, saw: 0.8 } as Record<EdgeKind, number>,
+  MIN: 0.25,
+  MAX: 7,
+};
+
+/**
+ * Saws and chainsaws cut as they slide: cutting power = K × normal force ×
+ * sliding speed × (H_saw / H_plate)^0.8, taken straight off the part's
+ * capacity (no elastic threshold — teeth remove metal however light the
+ * touch). A chainsaw pressed into 6 mm aluminium is through it in a couple of
+ * seconds; hardened steel takes several times as long.
+ */
+export const CUT = {
+  K: 0.035,
+  /** Contacts this light still cut (N) — a saw doesn't need to hit. */
+  EVENT_THRESHOLD: 40,
+  MIN_RATIO: 0.15,
+  MAX_RATIO: 10,
+};
+
+/**
+ * Crushers and spikes pierce under steady force, not just impacts. A plate
+ * resists a point up to F_p = K × σ_yield(MPa) × t(mm) newtons (about 4 kN
+ * for 6 mm aluminium, 19 kN for 6 mm hardened steel). Beyond that it loses
+ * RATE × (F/F_p − 1) of its condition per second (capped at MAX_OVERLOAD),
+ * scaled by (H_spike / H_plate)^0.5 — a soft spike just blunts.
+ */
+export const PIERCE = {
+  K: 2.5,
+  RATE: 0.35,
+  MAX_OVERLOAD: 4,
+};
+
+/** How much harder an edge of `edge` in `attacker` material hits a part of `defender` material. */
+export function edgeFactor(edge: EdgeKind, attacker: string, defender: string): number {
+  const r = hardnessOf(material(attacker)) / hardnessOf(material(defender));
+  const k = EDGE.factor[edge] * r ** EDGE.HARDNESS_EXP[edge];
+  return Math.max(EDGE.MIN, Math.min(EDGE.MAX, k));
+}
+
+/** Share of a robot-on-robot impact taken by the side made of `mine` (vs `theirs`): softer takes more. */
+export function impactShare(mine: string, theirs: string): number {
+  const a = 1 / Math.sqrt(hardnessOf(material(mine))), b = 1 / Math.sqrt(hardnessOf(material(theirs)));
+  return a / (a + b);
+}
+
+/** Saw cutting rate multiplier for teeth of `saw` material into `plate` material. */
+export function cutRatio(saw: string, plate: string): number {
+  const r = (hardnessOf(material(saw)) / hardnessOf(material(plate))) ** 0.8;
+  return Math.max(CUT.MIN_RATIO, Math.min(CUT.MAX_RATIO, r));
+}
+
+/** Force (N) a point needs to start piercing a plate of `materialId`, `thicknessMm` thick. */
+export function pierceForce(materialId: string, thicknessMm: number): number {
+  return PIERCE.K * material(materialId).yieldStrength * thicknessMm;
+}
 
 export interface Toughness {
   /** Energy absorbed elastically, J. */

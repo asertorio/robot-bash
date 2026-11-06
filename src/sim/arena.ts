@@ -123,6 +123,8 @@ export class Arena {
           .setFriction(b.kind === 'wall' || b.kind === 'barrier' ? 0.3 : ARENA.floorFriction)
           .setFrictionCombineRule(RAPIER.CoefficientCombineRule.Multiply)
           .setRestitution(0.05)
+          // Robots are a bit bouncy off each other, not off the arena.
+          .setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Min)
           .setCollisionGroups(ARENA_GROUPS),
         ground,
       );
