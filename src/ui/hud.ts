@@ -26,7 +26,7 @@ export class Hud {
   private reportMode: ReportMode = loadReportMode();
   private diagrams: RobotDiagram[] = [];
   private gaugeBoxes: HTMLDivElement[] = [];
-  private help: HTMLDivElement;
+  private help: HTMLButtonElement;
   private timer: HTMLDivElement;
   private big: HTMLDivElement;
   private feed: HTMLDivElement;
@@ -52,10 +52,11 @@ export class Hud {
       this.diagrams.push(diagram);
       return h('div', { class: `pbox${i % 2 ? ' right' : ''}`, style: `--pc:${PLAYER_COLOURS[i]}` },
         h('div', { class: 'pname' }, r.design.name),
-        h('div', { class: 'pmeta' }, `P${i + 1} · ${controllers[i]}`),
+        h('div', { class: 'pmeta who' }, `P${i + 1} · ${controllers[i]}`),
         gauges, meta, diagram.el, report);
     });
-    this.help = h('div', { class: 'help' });
+    // Tab cycles the damage display; tapping this does too (no Tab key on a phone).
+    this.help = h('button', { class: 'help', onclick: (e: Event) => { (e.currentTarget as HTMLElement).blur(); this.cycleReport(); } });
     const pause = onPause && h('button', { class: 'small pause', title: 'Pause (Esc, or Start on a pad)', onclick: (e: Event) => { (e.currentTarget as HTMLElement).blur(); onPause(); } }, '❚❚ Pause');
     this.big = h('div', { class: 'big' });
     this.feed = h('div', { class: 'feed' });
@@ -85,8 +86,9 @@ export class Hud {
   }
 
   private applyReportMode() {
-    const next = { diagram: 'full damage report', full: 'hide damage', off: 'damage diagrams' }[this.reportMode];
-    this.help.textContent = `Tab: ${next}`;
+    const next = { diagram: 'Full damage report', full: 'Hide damage', off: 'Damage diagrams' }[this.reportMode];
+    this.help.textContent = next;
+    this.help.title = 'Tab cycles the damage display';
     for (const d of this.diagrams) d.el.style.display = this.reportMode === 'off' ? 'none' : 'block';
     this.textClock = 0;
   }

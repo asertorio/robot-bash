@@ -16,6 +16,8 @@ import { Garage } from './ui/garage';
 import { h, mount } from './ui/dom';
 import { statLines } from './ui/format';
 import { Hud, PLAYER_COLOURS } from './ui/hud';
+import { TouchControls, buttonLabel } from './ui/touch';
+import type { Robot } from './sim/robot';
 
 type Controller = 'Human' | 'CPU';
 
@@ -43,6 +45,9 @@ class App {
   /** The current screen's key handler; return true to say a pad press was dealt with. */
   private screenKeys: ((code: string) => boolean | void) | null = null;
   private last = performance.now();
+  private touch = new TouchControls();
+  /** A touch screen is in use: show on-screen controls where they're needed. */
+  private touchSeen = window.matchMedia?.('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
 
   start() {
     // A click (not a drag) on the 3D view selects a part in the garage.
@@ -53,9 +58,46 @@ class App {
       if (!this.garage || down.gizmo || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
       this.pickHandler?.(this.view.pick(e.clientX, e.clientY));
     });
+    // On-screen controls for phones and tablets (they show themselves when needed).
+    document.body.append(this.touch.el);
+    document.body.classList.toggle('touch', this.touchSeen);
+    window.addEventListener('touchstart', () => {
+      if (this.touchSeen) return;
+      this.touchSeen = true;
+      document.body.classList.add('touch');
+      if (this.screenKeys === null && this.ui.querySelector('h1.title')) this.mainMenu();
+    }, { passive: true });
+    // Switching apps mid-press must not leave a finger "held down".
+    document.addEventListener('visibilitychange', () => this.touch.release());
     this.attract();
     this.mainMenu();
     requestAnimationFrame((t) => this.frame(t));
+  }
+
+  /**
+   * Show the touch controls when someone could use them: for the first human
+   * player in a fight, or for the test bay in the garage (on a phone, once the
+   * side panels are hidden — otherwise they'd cover the editor).
+   */
+  private updateTouch() {
+    let player: number | null = null;
+    let robot: Robot | undefined;
+    const m = this.match;
+    if (this.touchSeen && m) {
+      if (this.garage) {
+        if (window.innerWidth >= 900 || this.garage.el.classList.contains('panels-hidden')) { player = 0; robot = m.robots[0]; }
+      } else if (this.hud && !this.paused && !this.resultShown) {
+        const i = this.controllers.indexOf('Human');
+        if (i >= 0) { player = i; robot = m.competitors[i]; }
+      }
+    }
+    this.touch.show(player !== null);
+    this.input.touch = player !== null ? this.touch.state : null;
+    this.input.touchPlayer = player ?? 0;
+    if (robot) {
+      const uses = robot.buttonUses();
+      this.touch.setButtons([1, 2, 3, 4].map((n) => buttonLabel(uses.get(`button${n}`), robot!.flames.some((f) => f.def.input.source === `button${n}`))));
+    }
   }
 
   private pick(p: number): RobotDesign {
@@ -79,27 +121,27 @@ class App {
   private beginMatch(designs: RobotDesign[], controllers: Controller[], background = false, houseCount = 0) {
     // Build the new fight before throwing the old one away, so a robot that
     // can't be built leaves things as they were.
+    const st = this.settings;
     let match: Match;
     try {
-      match = new Match(designs, { duration: background ? 1e9 : 180, house: HOUSE_ROBOTS.slice(0, houseCount) });
+      match = new Match(designs, {
+        duration: background ? 1e9 : st.fightLength,
+        house: (background ? HOUSE_ROBOTS : houseLineup(st.houseSet)).slice(0, houseCount),
+        damageScale: background ? 1 : damageScale(st),
+        breaks: st.breaks,
+        finale: !background && st.finale,
+      });
     } catch (e) {
       if (background) throw e;
       alert(`That fight can't start: ${(e as Error).message}`);
       return;
     }
+    // Only one physics world at a time: Rapier worlds are WASM memory.
     this.match?.free();
     this.match = match;
     this.garage = null;
     this.view.setGizmo(null);
     this.view.cameraMode = 'tv';
-    const st = this.settings;
-    this.match = new Match(designs, {
-      duration: background ? 1e9 : st.fightLength,
-      house: (background ? HOUSE_ROBOTS : houseLineup(st.houseSet)).slice(0, houseCount),
-      damageScale: background ? 1 : damageScale(st),
-      breaks: st.breaks,
-      finale: !background && st.finale,
-    });
     this.slowmo = 0;
     this.lastSlowmo = -99;
     this.input.mode = background ? 'menu' : 'fight';
@@ -125,6 +167,7 @@ class App {
   private tick(t: number) {
     const dt = Math.min(0.05, (t - this.last) / 1000);
     this.last = t;
+    this.updateTouch();
     const controls = this.input.poll(dt * 1000);
     for (const code of this.input.takePressed()) {
       if (code.startsWith('Pad')) this.padPress(code);
@@ -212,7 +255,7 @@ class App {
         h('button', { onclick: () => this.controlsScreen() }, 'Controls'),
         h('button', { onclick: () => this.settingsScreen() }, 'Settings'),
         h('button', { onclick: () => this.howToScreen() }, 'How to play')),
-      touchOnly && h('div', { class: 'touch-note' }, 'Driving needs a keyboard or a game controller — connect one to fight. You can still look round the garage.'),
+      (touchOnly || this.touchSeen) && h('div', { class: 'touch-note' }, 'On a phone or tablet: turn it sideways, steer with the stick bottom left and fire with the buttons bottom right. In the garage, tap Hide panels to test-drive.'),
       h('div', { class: 'hazard-bar' }),
       h('div', { class: 'footnote' }, 'A physics-simulated robot combat game in the spirit of the classic British TV show. Every hit is worked out from real forces — no hit points.')));
   }
@@ -376,7 +419,8 @@ class App {
           h('li', {}, 'Player 2: ', kb('I'), kb('J'), kb('K'), kb('L'), ' or arrows drive · ', kb('O'), ', ', kb('/'), ' or right ', kb('Shift'), ' weapon 1 · ', kb('U'), ' or ', kb('.'), ' weapon 2 · ', kb('H'), kb('N'), ' weapons 3 and 4 · ', kb('M'), ' macro'),
           h('li', {}, 'Gamepads: left stick drives, A / RT weapon 1, B / LT weapon 2, X and Y weapons 3 and 4, Start pauses. In menus the D-pad moves, A picks, B goes back.'),
           h('li', {}, kb('Esc'), ' pauses (or the Pause button) · ', kb('Tab'), ' cycles the damage display: health diagrams, full report, off'),
-          h('li', {}, 'Everything can be remapped under Controls, including tank-style steering.')),
+          h('li', {}, 'Everything can be remapped under Controls, including tank-style steering.'),
+          h('li', {}, 'Phone or tablet: turn it sideways. The stick bottom left drives, the buttons bottom right fire (labelled with what they do). Tap the damage label at the top to cycle the display. In the garage, Hide panels to test-drive; pinch to zoom.')),
         h('h3', {}, 'Driving'),
         h('ul', {},
           h('li', {}, 'Drive keys build up to full power over a quarter of a second: tap for a small nudge, hold to charge. Let go and the motors brake.'),

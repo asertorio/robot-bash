@@ -374,6 +374,14 @@ use the same operator.
   throttle over 0.25 s (configurable per player, 0 = instant). A tap is a
   nudge; holding is full power. Sticks are proportional already and weapon
   keys are never ramped.
+- **Touch:** on phones and tablets an on-screen thumb-stick (bottom left)
+  drives the first human player arcade-style, through a deadzone and an expo
+  curve (gentle near the centre, full power at the edge), and a button per
+  weapon button the robot actually uses (bottom right, labelled Fire, Spin,
+  Saw, Grab…) presses that button. Multi-touch, so you can steer and fire at
+  once; the keyboard and pads still work alongside. In the garage the stick
+  drives the test bay, once the side panels are hidden on a phone. Pinch
+  zooms the garage camera.
 - **Macros:** a trigger binding runs a timed sequence, e.g.
   `weapon 150, back 300, left 200` (fire, reverse away, turn). Written as a tiny
   text format in the controls screen.

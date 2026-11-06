@@ -43,6 +43,32 @@ export function mixControls(profile: ControlProfile, read: BindingReader, macro:
   return { left, right, weapon: level('weapon') > 0.5, weapon2: level('weapon2') > 0.5, weapon3: level('weapon3') > 0.5, weapon4: level('weapon4') > 0.5 };
 }
 
+/** What on-screen touch controls are doing right now (see ui/touch.ts). */
+export interface TouchState {
+  /** Stick, −1..1: x right, y down (screen directions), after deadzone and expo. */
+  x: number;
+  y: number;
+  /** Weapon buttons 1–4. */
+  buttons: [boolean, boolean, boolean, boolean];
+}
+
+/**
+ * Add the touch controls to a player's controls. The stick mixes like an
+ * arcade transmitter (up is forward, sideways steers); when it's centred the
+ * keyboard or pad still drives. Weapon buttons add to whatever else is held.
+ */
+export function withTouch(c: ControlState, t: TouchState, profile: ControlProfile): ControlState {
+  const out = { ...c, weapon: c.weapon || t.buttons[0], weapon2: c.weapon2 || t.buttons[1], weapon3: !!c.weapon3 || t.buttons[2], weapon4: !!c.weapon4 || t.buttons[3] };
+  if (t.x === 0 && t.y === 0) return out;
+  const throttle = -t.y;
+  const turn = t.x * profile.turnRate;
+  let left = throttle + turn, right = throttle - turn;
+  const over = Math.max(1, Math.abs(left), Math.abs(right));
+  left /= over;
+  right /= over;
+  return { ...out, left, right };
+}
+
 /** Runs one player's macros: a trigger press plays its steps in order. */
 export class MacroRunner {
   private steps: MacroStep[] = [];
@@ -96,6 +122,9 @@ export class InputManager {
    * bound keys drive the test bay; in a fight Tab is ours too.
    */
   mode: 'menu' | 'garage' | 'fight' = 'menu';
+  /** On-screen touch controls, and which player they drive (null when hidden). */
+  touch: TouchState | null = null;
+  touchPlayer = 0;
   private captureBaseline: (Gamepad | null)[] = [];
   /** Codes bound to anything, so we can stop the page scrolling on arrows/space. */
   private boundCodes = new Set<string>();
@@ -166,7 +195,8 @@ export class InputManager {
     const out = this.profiles.map((p, i) => {
       this.ramp = p.keyRamp ?? DEFAULT_KEY_RAMP;
       this.runners[i].update(p, this.read, dtMs);
-      return mixControls(p, this.read, this.runners[i].active);
+      const c = mixControls(p, this.read, this.runners[i].active);
+      return this.touch && i === this.touchPlayer ? withTouch(c, this.touch, p) : c;
     });
     this.tapped.clear();
     return out;
