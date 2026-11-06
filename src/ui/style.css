@@ -236,3 +236,4 @@ textarea.json { width: 100%; background: #0d0f13; color: var(--muted); border: 1
 @media (max-width: 720px) {
   .hud .pbox .diagram { width: 72px !important; height: 72px !important; }
 }
+.robot-card .robot-pick { width: 100%; margin: 2px 0 8px; font-size: 13px; }

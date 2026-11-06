@@ -17,7 +17,8 @@ import type { V3 } from './vmath';
 
 export type Piece =
   | { kind: 'prim'; shape: Extract<Shape, { type: 'box' | 'cylinder' | 'cone' | 'sphere' | 'capsule' }> }
-  | { kind: 'hull'; points: Vec3[] }
+  /** `ring`: a lathe frustum (r0, y0, r1, y1), so its mass properties can be exact. */
+  | { kind: 'hull'; points: Vec3[]; ring?: [number, number, number, number] }
   | { kind: 'box'; centre: Vec3; half: Vec3 };
 
 const cache = new Map<string, Piece[]>();
@@ -60,63 +61,173 @@ export function armourPoints(s: Extract<Shape, { type: 'armour' }>): Vec3[] {
 
 const metricsCache = new Map<string, { volume: number; area: number }>();
 
+interface HullFaces {
+  /** Distinct points. */
+  pts: Vec3[];
+  /** A point inside the hull. */
+  centre: Vec3;
+  /** Each face's corners in order round the face, with its outward normal. */
+  faces: Array<{ normal: Vec3; d: number; corners: Vec3[] }>;
+}
+
+const facesCache = new Map<string, HullFaces | null>();
+
 /**
- * Exact volume and surface area of the convex hull of some points. Finds
- * the hull's face planes directly (fine for the few dozen points a part has).
+ * The faces of the convex hull of some points, found by testing every plane
+ * through three of them (fine for the few dozen points a part has; null for
+ * more than 80, or for something flat).
+ */
+function hullFaces(points: Vec3[]): HullFaces | null {
+  const key = points.map((p) => p.join(',')).join(';');
+  if (facesCache.has(key)) return facesCache.get(key)!;
+  const pts: Vec3[] = [];
+  for (const p of points) if (!pts.some((q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) < 1e-9)) pts.push(p);
+  const n = pts.length;
+  let out: HullFaces | null = null;
+  if (n >= 4 && n <= 80) {
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (const q of pts) for (let i = 0; i < 3; i++) { min[i] = Math.min(min[i], q[i]); max[i] = Math.max(max[i], q[i]); }
+    const eps = 1e-7 * (1 + Math.max(max[0] - min[0], max[1] - min[1], max[2] - min[2]));
+    const c = pts.reduce((a, p) => [a[0] + p[0] / n, a[1] + p[1] / n, a[2] + p[2] / n], [0, 0, 0]) as Vec3;
+    const planes: Array<{ n: Vec3; d: number }> = [];
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) for (let k = j + 1; k < n; k++) {
+      const a = pts[i], b = pts[j], q = pts[k];
+      const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], v = [q[0] - a[0], q[1] - a[1], q[2] - a[2]];
+      let nx = u[1] * v[2] - u[2] * v[1], ny = u[2] * v[0] - u[0] * v[2], nz = u[0] * v[1] - u[1] * v[0];
+      const len = Math.hypot(nx, ny, nz);
+      if (len < 1e-14) continue;
+      nx /= len; ny /= len; nz /= len;
+      let d = nx * a[0] + ny * a[1] + nz * a[2];
+      let pos = false, neg = false;
+      for (const p of pts) {
+        const sd = nx * p[0] + ny * p[1] + nz * p[2] - d;
+        if (sd > eps) pos = true; else if (sd < -eps) neg = true;
+        if (pos && neg) break;
+      }
+      if ((pos && neg) || (!pos && !neg)) continue;
+      if (pos) { nx = -nx; ny = -ny; nz = -nz; d = -d; }
+      if (planes.some((p) => p.n[0] * nx + p.n[1] * ny + p.n[2] * nz > 1 - 1e-9 && Math.abs(p.d - d) < eps)) continue;
+      planes.push({ n: [nx, ny, nz], d });
+    }
+    if (planes.length >= 4) {
+      const faces = planes.map(({ n: nv, d }) => {
+        const face = pts.filter((p) => Math.abs(nv[0] * p[0] + nv[1] * p[1] + nv[2] * p[2] - d) < eps * 10);
+        const fc = face.reduce((a, p) => [a[0] + p[0] / face.length, a[1] + p[1] / face.length, a[2] + p[2] / face.length], [0, 0, 0]);
+        // In-plane basis to order the face's corners by angle.
+        const r0 = [face[0][0] - fc[0], face[0][1] - fc[1], face[0][2] - fc[2]];
+        const l0 = Math.hypot(r0[0], r0[1], r0[2]) || 1;
+        const t1 = [r0[0] / l0, r0[1] / l0, r0[2] / l0];
+        const t2 = [nv[1] * t1[2] - nv[2] * t1[1], nv[2] * t1[0] - nv[0] * t1[2], nv[0] * t1[1] - nv[1] * t1[0]];
+        const angle = (p: Vec3) => { const r = [p[0] - fc[0], p[1] - fc[1], p[2] - fc[2]]; return Math.atan2(r[0] * t2[0] + r[1] * t2[1] + r[2] * t2[2], r[0] * t1[0] + r[1] * t1[1] + r[2] * t1[2]); };
+        return { normal: nv, d, corners: [...face].sort((a, b) => angle(a) - angle(b)) };
+      });
+      out = { pts, centre: c, faces };
+    }
+  }
+  if (facesCache.size > 500) facesCache.clear();
+  facesCache.set(key, out);
+  return out;
+}
+
+/**
+ * Exact volume and surface area of the convex hull of some points.
  */
 export function hullMetrics(points: Vec3[]): { volume: number; area: number } {
   const key = points.map((p) => p.join(',')).join(';');
   const hit = metricsCache.get(key);
   if (hit) return hit;
-  const pts: Vec3[] = [];
-  for (const p of points) if (!pts.some((q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) < 1e-9)) pts.push(p);
-  const n = pts.length;
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
-  for (const q of pts) for (let i = 0; i < 3; i++) { min[i] = Math.min(min[i], q[i]); max[i] = Math.max(max[i], q[i]); }
+  for (const q of points) for (let i = 0; i < 3; i++) { min[i] = Math.min(min[i], q[i]); max[i] = Math.max(max[i], q[i]); }
   const box = { volume: (max[0] - min[0]) * (max[1] - min[1]) * (max[2] - min[2]) * 0.6, area: 2 * ((max[0] - min[0]) * (max[1] - min[1]) + (max[0] - min[0]) * (max[2] - min[2]) + (max[1] - min[1]) * (max[2] - min[2])) * 0.8 };
-  if (n < 4 || n > 80) return box;
-  const eps = 1e-7 * (1 + Math.max(max[0] - min[0], max[1] - min[1], max[2] - min[2]));
-  const c = pts.reduce((a, p) => [a[0] + p[0] / n, a[1] + p[1] / n, a[2] + p[2] / n], [0, 0, 0]);
-  const planes: Array<{ n: Vec3; d: number }> = [];
-  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) for (let k = j + 1; k < n; k++) {
-    const a = pts[i], b = pts[j], q = pts[k];
-    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], v = [q[0] - a[0], q[1] - a[1], q[2] - a[2]];
-    let nx = u[1] * v[2] - u[2] * v[1], ny = u[2] * v[0] - u[0] * v[2], nz = u[0] * v[1] - u[1] * v[0];
-    const len = Math.hypot(nx, ny, nz);
-    if (len < 1e-14) continue;
-    nx /= len; ny /= len; nz /= len;
-    let d = nx * a[0] + ny * a[1] + nz * a[2];
-    let pos = false, neg = false;
-    for (const p of pts) {
-      const s = nx * p[0] + ny * p[1] + nz * p[2] - d;
-      if (s > eps) pos = true; else if (s < -eps) neg = true;
-      if (pos && neg) break;
+  const hf = hullFaces(points);
+  let out = box;
+  if (hf) {
+    let volume = 0, area = 0;
+    const c = hf.centre;
+    for (const f of hf.faces) {
+      const A = polygonArea3(f.corners, f.normal);
+      area += A;
+      volume += (A * (f.d - (f.normal[0] * c[0] + f.normal[1] * c[1] + f.normal[2] * c[2]))) / 3;
     }
-    if ((pos && neg) || (!pos && !neg)) continue;
-    if (pos) { nx = -nx; ny = -ny; nz = -nz; d = -d; }
-    if (planes.some((p) => p.n[0] * nx + p.n[1] * ny + p.n[2] * nz > 1 - 1e-9 && Math.abs(p.d - d) < eps)) continue;
-    planes.push({ n: [nx, ny, nz], d });
+    if (volume > 0) out = { volume, area };
   }
-  if (planes.length < 4) return box;
-  let volume = 0, area = 0;
-  for (const { n: nv, d } of planes) {
-    const face = pts.filter((p) => Math.abs(nv[0] * p[0] + nv[1] * p[1] + nv[2] * p[2] - d) < eps * 10);
-    const fc = face.reduce((a, p) => [a[0] + p[0] / face.length, a[1] + p[1] / face.length, a[2] + p[2] / face.length], [0, 0, 0]);
-    // In-plane basis to order the face's corners by angle.
-    const t1 = (() => { const r = [face[0][0] - fc[0], face[0][1] - fc[1], face[0][2] - fc[2]]; const l = Math.hypot(r[0], r[1], r[2]) || 1; return [r[0] / l, r[1] / l, r[2] / l]; })();
-    const t2 = [nv[1] * t1[2] - nv[2] * t1[1], nv[2] * t1[0] - nv[0] * t1[2], nv[0] * t1[1] - nv[1] * t1[0]];
-    const flat = face.map((p) => { const r = [p[0] - fc[0], p[1] - fc[1], p[2] - fc[2]]; return [r[0] * t1[0] + r[1] * t1[1] + r[2] * t1[2], r[0] * t2[0] + r[1] * t2[1] + r[2] * t2[2]]; })
-      .sort((a, b) => Math.atan2(a[1], a[0]) - Math.atan2(b[1], b[0]));
-    let A = 0;
-    for (let i = 0; i < flat.length; i++) { const p = flat[i], q = flat[(i + 1) % flat.length]; A += p[0] * q[1] - q[0] * p[1]; }
-    A = Math.abs(A) / 2;
-    area += A;
-    volume += (A * (d - (nv[0] * c[0] + nv[1] * c[1] + nv[2] * c[2]))) / 3;
-  }
-  const out = volume > 0 ? { volume, area } : box;
   if (metricsCache.size > 500) metricsCache.clear();
   metricsCache.set(key, out);
   return out;
+}
+
+function polygonArea3(corners: Vec3[], n: Vec3): number {
+  let x = 0, y = 0, z = 0;
+  for (let i = 0; i < corners.length; i++) {
+    const a = corners[i], b = corners[(i + 1) % corners.length];
+    x += a[1] * b[2] - a[2] * b[1]; y += a[2] * b[0] - a[0] * b[2]; z += a[0] * b[1] - a[1] * b[0];
+  }
+  return Math.abs(x * n[0] + y * n[1] + z * n[2]) / 2;
+}
+
+/**
+ * Mass properties of a convex piece, per unit mass: centre of mass and the
+ * inertia tensor about it (row-major 3×3), in the piece's own frame. The
+ * physics engine's own calculation goes badly wrong for very flat hulls (a
+ * shallow cone a few mm high, say), so we work them out here. Null means the
+ * engine's own is fine (boxes, primitives).
+ */
+export function pieceMassProps(p: Piece): { com: Vec3; inertia: number[] } | null {
+  if (p.kind !== 'hull') return null;
+  if (p.ring) return frustumMassProps(...p.ring);
+  const hf = hullFaces(p.points);
+  if (!hf) return null;
+  // Split into tetrahedra from an inside point; sum volumes, first and second moments.
+  const c = hf.centre;
+  let V = 0;
+  const m1 = [0, 0, 0];
+  const m2 = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+  for (const f of hf.faces) {
+    const k = f.corners;
+    for (let i = 1; i + 1 < k.length; i++) {
+      const tet = [c, k[0], k[i], k[i + 1]];
+      const e1 = tet[1].map((v, j) => v - c[j]), e2 = tet[2].map((v, j) => v - c[j]), e3 = tet[3].map((v, j) => v - c[j]);
+      const vol = Math.abs(e1[0] * (e2[1] * e3[2] - e2[2] * e3[1]) - e1[1] * (e2[0] * e3[2] - e2[2] * e3[0]) + e1[2] * (e2[0] * e3[1] - e2[1] * e3[0])) / 6;
+      if (vol <= 0) continue;
+      const sum = [0, 1, 2].map((j) => tet.reduce((s2, q) => s2 + q[j], 0));
+      V += vol;
+      for (let a = 0; a < 3; a++) {
+        m1[a] += (vol * sum[a]) / 4;
+        for (let b = 0; b < 3; b++) {
+          // ∫ x_a x_b over a tetrahedron = V/20 (Σ v_a v_b + Σv_a Σv_b).
+          const own = tet.reduce((s2, q) => s2 + q[a] * q[b], 0);
+          m2[a * 3 + b] += (vol / 20) * (own + sum[a] * sum[b]);
+        }
+      }
+    }
+  }
+  if (V <= 1e-15) return null;
+  const com: Vec3 = [m1[0] / V, m1[1] / V, m1[2] / V];
+  const cov = m2.map((v, i) => v / V - com[Math.floor(i / 3)] * com[i % 3]);
+  return { com, inertia: covToInertia(cov) };
+}
+
+/** Solid frustum about Y from (r0 at y0) to (r1 at y1), by thin discs. */
+function frustumMassProps(r0: number, y0: number, r1: number, y1: number): { com: Vec3; inertia: number[] } {
+  const N = 64;
+  let m = 0, my = 0, myy = 0, mrr = 0;
+  for (let i = 0; i < N; i++) {
+    const t = (i + 0.5) / N;
+    const r = r0 + (r1 - r0) * t, y = y0 + (y1 - y0) * t;
+    const dm = r * r; // ∝ disc area
+    m += dm; my += dm * y; myy += dm * y * y; mrr += dm * r * r;
+  }
+  if (m <= 0) return { com: [0, (y0 + y1) / 2, 0], inertia: [0, 0, 0, 0, 0, 0, 0, 0, 0] };
+  const cy = my / m;
+  const iy = (0.5 * mrr) / m;
+  const ix = (0.25 * mrr) / m + myy / m - cy * cy;
+  return { com: [0, cy, 0], inertia: [ix, 0, 0, 0, iy, 0, 0, 0, ix] };
+}
+
+/** Inertia tensor (per unit mass) from the second-moment (covariance) matrix. */
+function covToInertia(c: number[]): number[] {
+  const tr = c[0] + c[4] + c[8];
+  return c.map((v, i) => (i % 4 === 0 ? tr - v : -v));
 }
 
 // ---------------------------------------------------------------- extrusion
@@ -219,7 +330,7 @@ function lathePieces(s: Extract<Shape, { type: 'lathe' }>): Piece[] {
       const t = (k / n) * 2 * Math.PI, c = Math.cos(t), si = Math.sin(t);
       points.push([Math.abs(r0) * c, y0, Math.abs(r0) * si], [Math.abs(r1) * c, y1, Math.abs(r1) * si]);
     }
-    out.push({ kind: 'hull', points });
+    out.push({ kind: 'hull', points, ring: [Math.abs(r0), y0, Math.abs(r1), y1] });
   }
   return out;
 }

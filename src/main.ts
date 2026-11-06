@@ -147,15 +147,24 @@ class App {
   }
 
   private selectScreen() {
-    this.roster = [...TEMPLATES, ...loadDesigns()];
+    const saved = loadDesigns();
+    this.roster = [...TEMPLATES, ...HOUSE_ROBOTS, ...saved];
     this.picks = this.picks.map((p) => Math.min(p, this.roster.length - 1));
     const n = () => this.roster.length;
     const render = () => {
       const cards = [0, 1].map((p) => {
         const design = this.roster[this.picks[p]];
         const stats = computeStats(design);
-        const mine = !TEMPLATES.includes(design);
+        const mine = saved.includes(design);
+        const house = HOUSE_ROBOTS.includes(design);
         const issues = scrutineer(design);
+        const group = (label: string, list: RobotDesign[]) => list.length
+          ? h('optgroup', { label }, ...list.map((d) => h('option', { value: String(this.roster.indexOf(d)), selected: d === design }, d.name)))
+          : null;
+        const pick = h('select', {
+          class: 'robot-pick', 'aria-label': `Player ${p + 1} robot`,
+          onchange: () => { this.picks[p] = Number(pick.value); pick.blur(); render(); },
+        }, group('Starter robots', TEMPLATES), group('House robots', HOUSE_ROBOTS), group('Your builds', saved));
         const cycle = (d: number) => { this.picks[p] = (this.picks[p] + d + n()) % n(); render(); };
         const setCtl = (c: Controller) => { this.controllers[p] = c; render(); };
         return h('div', { class: 'robot-card', style: `--pc:${PLAYER_COLOURS[p]}` },
@@ -166,10 +175,14 @@ class App {
             h('button', { onclick: () => cycle(-1), 'aria-label': 'Previous robot' }, '◀'),
             h('div', { class: 'name', style: `color:${design.colour}` }, design.name),
             h('button', { onclick: () => cycle(1), 'aria-label': 'Next robot' }, '▶')),
+          pick,
           mine && h('div', { class: 'mine' }, 'Your build'),
+          house && h('div', { class: 'mine' }, 'House robot'),
           h('div', { class: 'desc' }, design.description),
           h('dl', { class: 'stats' }, ...statLines(stats).flatMap(([k, v, bad]) => [h('dt', {}, k), h('dd', { class: bad ? 'over' : '' }, v)])),
-          !isLegal(issues) && h('div', { class: 'legal bad' }, `Fails heavyweight scrutineering: ${issues.find((i) => i.level === 'error')!.text}`),
+          house
+            ? h('div', { class: 'legal' }, 'Built to house-robot rules, not the competition\'s: far over the heavyweight limit.')
+            : !isLegal(issues) && h('div', { class: 'legal bad' }, `Fails heavyweight scrutineering: ${issues.find((i) => i.level === 'error')!.text}`),
           h('div', { class: 'keys-hint' }, p === 0 ? 'A / D to change robot' : 'J / L to change robot'),
           mine && h('button', { class: 'small', style: 'margin-top:8px', onclick: () => this.garageScreen(design) }, 'Edit in garage'));
       });

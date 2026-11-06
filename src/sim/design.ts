@@ -72,7 +72,15 @@ export interface InputDef {
 
 export type ActuatorDef =
   /** Continuous rotation through a gearbox (wheels, spinners, drums). Hinges only. */
-  | { type: 'motor'; motor: string; gear: number; input: InputDef }
+  | {
+    type: 'motor'; motor: string; gear: number; input: InputDef;
+    /**
+     * Seconds the speed controller takes to ramp to full power (0 or absent =
+     * instant). Spinning a heavy weapon up gently stops its reaction torque
+     * spinning the robot round the other way.
+     */
+    softStart?: number;
+  }
   /** Gas ram: flippers, lifters, axes, spikes. `leverArm` (m) applies on hinges. */
   | { type: 'pneumatic'; ram: string; valve: string; pressure: number; leverArm: number; input: InputDef }
   /**

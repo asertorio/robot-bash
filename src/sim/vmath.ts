@@ -57,3 +57,59 @@ export function mulberry32(seed: number): () => number {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+/**
+ * Principal moments and axes of a symmetric 3×3 matrix (row-major), by Jacobi
+ * rotations. Returns the eigenvalues and a rotation whose columns are the
+ * matching eigenvectors.
+ */
+export function principalAxes(m: number[]): { values: V3; frame: Q } {
+  const a = [[m[0], m[1], m[2]], [m[3], m[4], m[5]], [m[6], m[7], m[8]]];
+  const v = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  for (let sweep = 0; sweep < 30; sweep++) {
+    const off = Math.abs(a[0][1]) + Math.abs(a[0][2]) + Math.abs(a[1][2]);
+    if (off < 1e-14 * (Math.abs(a[0][0]) + Math.abs(a[1][1]) + Math.abs(a[2][2]) + 1e-30)) break;
+    for (const [p, q] of [[0, 1], [0, 2], [1, 2]]) {
+      if (Math.abs(a[p][q]) < 1e-30) continue;
+      const theta = (a[q][q] - a[p][p]) / (2 * a[p][q]);
+      const t = Math.sign(theta || 1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
+      const c = 1 / Math.sqrt(t * t + 1), s = t * c;
+      for (let k = 0; k < 3; k++) {
+        const akp = a[k][p], akq = a[k][q];
+        a[k][p] = c * akp - s * akq; a[k][q] = s * akp + c * akq;
+      }
+      for (let k = 0; k < 3; k++) {
+        const apk = a[p][k], aqk = a[q][k];
+        a[p][k] = c * apk - s * aqk; a[q][k] = s * apk + c * aqk;
+      }
+      for (let k = 0; k < 3; k++) {
+        const vkp = v[k][p], vkq = v[k][q];
+        v[k][p] = c * vkp - s * vkq; v[k][q] = s * vkp + c * vkq;
+      }
+    }
+  }
+  // Make it a proper rotation (det +1).
+  const det = v[0][0] * (v[1][1] * v[2][2] - v[1][2] * v[2][1]) - v[0][1] * (v[1][0] * v[2][2] - v[1][2] * v[2][0]) + v[0][2] * (v[1][0] * v[2][1] - v[1][1] * v[2][0]);
+  if (det < 0) for (let k = 0; k < 3; k++) v[k][2] = -v[k][2];
+  return { values: { x: a[0][0], y: a[1][1], z: a[2][2] }, frame: matToQuat(v) };
+}
+
+function matToQuat(r: number[][]): Q {
+  const tr = r[0][0] + r[1][1] + r[2][2];
+  let q: Q;
+  if (tr > 0) {
+    const s = Math.sqrt(tr + 1) * 2;
+    q = { w: s / 4, x: (r[2][1] - r[1][2]) / s, y: (r[0][2] - r[2][0]) / s, z: (r[1][0] - r[0][1]) / s };
+  } else if (r[0][0] > r[1][1] && r[0][0] > r[2][2]) {
+    const s = Math.sqrt(1 + r[0][0] - r[1][1] - r[2][2]) * 2;
+    q = { w: (r[2][1] - r[1][2]) / s, x: s / 4, y: (r[0][1] + r[1][0]) / s, z: (r[0][2] + r[2][0]) / s };
+  } else if (r[1][1] > r[2][2]) {
+    const s = Math.sqrt(1 + r[1][1] - r[0][0] - r[2][2]) * 2;
+    q = { w: (r[0][2] - r[2][0]) / s, x: (r[0][1] + r[1][0]) / s, y: s / 4, z: (r[1][2] + r[2][1]) / s };
+  } else {
+    const s = Math.sqrt(1 + r[2][2] - r[0][0] - r[1][1]) * 2;
+    q = { w: (r[1][0] - r[0][1]) / s, x: (r[0][2] + r[2][0]) / s, y: (r[1][2] + r[2][1]) / s, z: s / 4 };
+  }
+  const n = Math.hypot(q.x, q.y, q.z, q.w);
+  return { x: q.x / n, y: q.y / n, z: q.z / n, w: q.w / n };
+}

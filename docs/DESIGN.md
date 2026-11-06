@@ -178,6 +178,19 @@ motor, so back-EMF gives `τ = −τ_stall × ω/ω_free`, with no battery curre
 rather than letting the robot coast. That is what real drive ESCs do, and what
 makes a quick tap a small, controllable move. Weapon motors coast.
 
+### Mass properties
+
+Rapier's own mass properties go badly wrong for very flat convex hulls (a
+lathe piece a few mm high comes out with inertia hundreds of times too big),
+so hull pieces get theirs from `pieceMassProps` in `src/sim/shapes.ts`:
+lathe frustums integrated as thin discs, other hulls by tetrahedra.
+
+### Soft start
+
+A motor actuator can have `softStart` (s): its speed controller ramps the
+throttle up over that time. A heavy full-body or disc spinner otherwise twists
+the whole robot round the other way while it spins up.
+
 ### Pneumatic flipper
 
 ```
@@ -201,10 +214,13 @@ bodies.
 ## Damage model
 
 Rapier reports per-step contact forces for every collider pair. From each one we estimate the energy the impact dissipated, using the closing
-speed at the contact point just before the step:
+speed at the contact point just before the step — before the robots' own
+motors and rams act that step, or a ram pushing a plate into an opponent would
+look like a fresh impact every step:
 
 ```
-E      ≈ ½ × (F_contact × dt) × v_closing     (each side absorbs half)
+E      ≈ ½ × (F_contact × dt) × v_closing     (robot vs robot: each side absorbs half;
+                                               robot vs arena: the robot takes it all)
 E_y    = K_yield × σ_yield × t²               (plates resist ~ thickness²)
 damage = max(0, E − E_y) / (K_cap × toughness × t × sizeFactor)
 ```
@@ -213,8 +229,22 @@ A single hit often spans several physics steps, so energy is summed per
 *impact episode* (same pair of colliders, gaps under 20 ms, at most 250 ms)
 and the yield threshold applies to the whole hit. Pushing contests (big
 forces, almost no closing speed) do nothing; a spinner strike or a slam into
-the floor after a flip does. Constants are in `src/sim/damage.ts` so balance
-can be tuned in one place.
+the floor after a flip does.
+
+**Shock.** Hard landings and slams mostly hurt what's bolted inside, not the
+plate. Each robot tracks its chassis' change of velocity over ~25 ms (gravity
+taken out, so free fall is nothing); when a jolt is over, every internal takes
+
+```
+loss = K_shock × max(0, Δv − 2 m/s)² × sensitivity
+```
+
+Batteries and speed controllers are the most sensitive, then motors and rams,
+then gas bottles; ballast doesn't care. A 1 m drop costs the electronics
+~7%, a 2 m flip landing ~20%, a full-speed ram ~14%; ordinary driving nothing.
+Landing damage counts for whoever threw you (they touched you last and you've
+been airborne since) with the judges. Constants are in `src/sim/damage.ts` so
+balance can be tuned in one place.
 
 Part condition is internal state. The player sees it the way a builder would:
 in the commentary feed ("its left wheel has come off!") and in the pit damage
@@ -254,6 +284,18 @@ Weight, cost, top speed, pushing force (traction-limited vs motor-limited),
 flipper shots per tank, battery runtime at full load, armour rating per face,
 and **repairability**: spares availability (common / specialist / custom), cost
 of a full rebuild, and pit time per part.
+
+## CPU drivers
+
+The CPU chases, lines up and backs off when stuck, through the same controls
+a human has. Weapons are worked generically by `WeaponOperator`
+(`src/sim/ai.ts`): spinners and drums are switched on and left on; anything
+on a stroke (flippers, axes, crushers, rams, servos) is fired only when
+sweeping its driven part through the stroke would actually reach the target,
+and the button is held for the whole stroke (0.5 s for a dump-valve flipper,
+1.6 s for a slow lifter). Slow lifters only fire with the target resting on
+top of them. Flamethrowers fire when the target is in the cone. House robots
+use the same operator.
 
 ## Controls
 

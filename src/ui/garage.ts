@@ -1,6 +1,7 @@
 import { deleteDesign, loadDesigns, parseDesign, saveDesign } from '../data/garage';
 import { MATERIALS, type Material } from '../data/materials';
 import { BATTERIES, MOTORS, RAMS, TANKS, VALVES, WHEELS, type BatterySpec, type MotorSpec, type RamSpec, type TankSpec, type ValveSpec, type WheelSpec } from '../data/parts';
+import { HOUSE_ROBOTS } from '../data/house';
 import { TEMPLATES } from '../data/templates';
 import { actuatorOf, childrenOf, partMass, registerCatalog, root } from '../sim/assembly';
 import { convexPieces, shapeHalf } from '../sim/shapes';
@@ -40,7 +41,7 @@ export interface GarageHost {
   onPick(cb: (partId: string | null) => void): void;
 }
 
-const TEMPLATE_IDS = new Set(TEMPLATES.map((t) => t.id));
+const TEMPLATE_IDS = new Set([...TEMPLATES, ...HOUSE_ROBOTS].map((t) => t.id));
 const fmt = (v: number, d = 0) => v.toLocaleString('en-GB', { minimumFractionDigits: d, maximumFractionDigits: d });
 
 /**
@@ -276,7 +277,7 @@ export class Garage {
     if (TEMPLATE_IDS.has(this.draft.id)) {
       // Never overwrite a starter robot: saving makes it yours.
       this.draft.id = `custom-${Date.now().toString(36)}`;
-      if (TEMPLATES.some((t) => t.name === this.draft.name)) this.draft.name = `${this.draft.name} Mk II`;
+      if ([...TEMPLATES, ...HOUSE_ROBOTS].some((t) => t.name === this.draft.name)) this.draft.name = `${this.draft.name} Mk II`;
     }
     saveDesign(cloneDesign(this.draft));
     const legal = isLegal(scrutineer(this.draft, this.rules));
@@ -354,6 +355,9 @@ export class Garage {
       h('div', { class: 'chips' },
         ...TEMPLATES.map((t) => h('button', { class: 'small', onclick: () => this.confirmLoad(t) }, t.name)),
         h('button', { class: 'small', onclick: () => this.confirmLoad(blankDesign()) }, 'Blank chassis')),
+      h('h4', {}, 'House robots'),
+      h('div', { class: 'hint' }, 'See how the arena\'s heavies are built, or make your own. They\'re far over the competitor limits — set the weight class to Open to pass scrutineering.'),
+      h('div', { class: 'chips' }, ...HOUSE_ROBOTS.map((t) => h('button', { class: 'small', onclick: () => this.confirmLoad(t) }, t.name))),
       h('h4', {}, 'My robots'),
       saved.length
         ? h('div', { class: 'saved' }, ...saved.map((s) => h('div', { class: 'saved-row' },
@@ -599,6 +603,10 @@ export class Garage {
     if (a.type === 'motor' || a.type === 'servo') {
       out.push(...this.catalogSel('Motor', 'motors', a.motor, (v) => (a.motor = v), (m: MotorSpec) => `${m.name} — ${m.voltage} V, ${m.stallTorque} N·m, ${fmt(m.freeSpeed)} rpm, ${m.mass} kg`));
       out.push(this.num('Gear reduction', a.gear, (v) => (a.gear = v), { min: 1, max: 200, step: 0.5, unit: ': 1', floor: 0.01 }));
+    }
+    if (a.type === 'motor') {
+      out.push(this.num('Soft start', a.softStart ?? 0, (v) => { if (v > 0) a.softStart = v; else delete a.softStart; }, { min: 0, max: 10, step: 0.1, unit: 's', floor: 0 }));
+      out.push(h('div', { class: 'hint' }, 'Seconds the speed controller takes to ramp up to full power. Spinning a heavy weapon up gently stops it twisting the whole robot round the other way.'));
     }
     if (a.type === 'servo') {
       const unit = j.type === 'hinge' ? '°' : 'mm';

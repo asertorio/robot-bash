@@ -109,6 +109,8 @@ export class Match {
   private lastRoast = new Map<Robot, number>();
   private lastCountSay: number[] = [];
   private lastTorch = new Map<string, number>();
+  /** Who last touched each robot, and when (for crediting landing damage). */
+  private lastHitBy = new Map<Robot, { robot: Robot; time: number; y: number; peak: number }>();
 
   constructor(designs: RobotDesign[], opts: MatchOptions = {}) {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -166,14 +168,25 @@ export class Match {
       r.setControl(live ? this.controls[i] ?? NEUTRAL : NEUTRAL);
     });
     if (this.stepCount % 8 === 1) this.driveHouseRobots(8 * STEP);
+    // Velocities before this step's motor and ram impulses: a ram pushing a
+    // plate against an opponent isn't an impact (the solver would otherwise
+    // see the plate leap forward and stop dead every step).
+    const snapshot = this.snapshot();
     for (const r of this.robots) r.update(STEP);
     this.arena.update(STEP);
 
-    const snapshot = this.snapshot();
     this.world.step(this.events);
     this.processContacts(snapshot);
 
     for (const r of this.robots) {
+      const shaken = r.measureShock(STEP);
+      // A big landing is the work of whoever just threw you: they touched you
+      // last, and you've been up in the air since.
+      const by = this.lastHitBy.get(r);
+      if (by) by.peak = Math.max(by.peak, r.position.y);
+      if (shaken > 0 && this.phase === 'fight' && by && this.time - by.time < 2 && by.peak - by.y > 0.2 && r.index < this.tally.length && by.robot.index < this.tally.length) {
+        this.tally[by.robot.index].damage += shaken;
+      }
       r.resolveDamage();
       for (const e of r.events) this.say(phrase(r.design.name, e.text), e.level);
       r.events = [];
@@ -207,6 +220,7 @@ export class Match {
       if (!c1 || !c2) return;
       const owner1 = this.owner(c1), owner2 = this.owner(c2);
       if (!owner1 && !owner2) return;
+      if (owner1 && owner2 && owner1.robot !== owner2.robot) this.touched(owner1.robot, owner2.robot);
       const impulse = e.totalForceMagnitude() * STEP;
 
       let point: V3 | null = null;
@@ -236,7 +250,10 @@ export class Match {
         ep = { energy: 0, start: this.time, last: this.time };
         this.episodes.set(key, ep);
       }
-      const prior = ep.energy / 2;
+      // Robot on robot, each side soaks up half. Against the arena (a
+      // massive steel structure) the robot is what gives, so it takes it all.
+      const share = owner1 && owner2 ? 0.5 : 1;
+      const prior = ep.energy * share;
       ep.energy += energy;
       ep.last = this.time;
       if (ep.energy > 20 && ep.energy > (this.biggestHit?.energy ?? 0) && (owner1 || owner2)) {
@@ -244,10 +261,8 @@ export class Match {
         this.biggestHit = { energy: ep.energy, time: this.time, parts: names.join(' vs ') };
       }
 
-      // Each side of the contact soaks up half.
-      const half = energy / 2;
-      const loss1 = owner1 ? owner1.robot.absorb(owner1.part, half, point, prior) : 0;
-      const loss2 = owner2 ? owner2.robot.absorb(owner2.part, half, point, prior) : 0;
+      const loss1 = owner1 ? owner1.robot.absorb(owner1.part, energy * share, point, prior) : 0;
+      const loss2 = owner2 ? owner2.robot.absorb(owner2.part, energy * share, point, prior) : 0;
       if (this.phase !== 'fight') return;
       // Only competitor-on-competitor damage impresses the judges.
       const t1 = owner1 && this.tally[owner1.robot.index], t2 = owner2 && this.tally[owner2.robot.index];
@@ -368,6 +383,7 @@ export class Match {
       const speed = Math.hypot(v.x, v.z);
       const trying = Math.abs(c.left) + Math.abs(c.right) > 0.2;
       const contact = this.contacts(i);
+      if (contact.touching) this.touched(r, contact.touching);
       const active = speed > 0.12 || Math.abs(r.chassis.angvel().y) > 0.6 || contact.opponent;
       const selfMoving = trying && active && !contact.house && r.tractionWheels() > 0;
       // Once the count has started, a robot has to show it really can move —
@@ -410,9 +426,9 @@ export class Match {
   }
 
   /** Is competitor `i` touching another competitor, and is it touching a house robot? */
-  private contacts(i: number): { opponent: boolean; house: boolean } {
+  private contacts(i: number): { opponent: boolean; house: boolean; touching: Robot | null } {
     const mine = this.robotColliders[i];
-    const out = { opponent: false, house: false };
+    const out = { opponent: false, house: false, touching: null as Robot | null };
     const me = this.robots[i];
     for (const p of me.parts) {
       if (out.opponent && out.house) break;
@@ -425,11 +441,28 @@ export class Match {
           if (j < 0) return;
           const kind = j < this.competitors.length ? 'opponent' : 'house';
           if (out[kind]) return;
-          this.world.contactPair(c, other, (m) => { if (m.numContacts() > 0) out[kind] = true; });
+          this.world.contactPair(c, other, (m) => { if (m.numContacts() > 0) { out[kind] = true; out.touching ??= this.robots[j]; } });
         });
       }
     }
     return out;
+  }
+
+  /** Remember who's touching whom, however gently (for crediting throws). */
+  private touched(a: Robot, b: Robot) {
+    for (const [me, them] of [[a, b], [b, a]]) {
+      const y = me.position.y;
+      const prev = this.lastHitBy.get(me);
+      // Still the same tussle: keep where it started, so landing on them after
+      // they threw you still counts as their throw.
+      if (prev && prev.robot === them && this.time - prev.time < 2) {
+        prev.time = this.time;
+        prev.y = Math.min(prev.y, y);
+        prev.peak = Math.max(prev.peak, y);
+      } else {
+        this.lastHitBy.set(me, { robot: them, time: this.time, y, peak: y });
+      }
+    }
   }
 
   private eliminate(i: number, how: string) {

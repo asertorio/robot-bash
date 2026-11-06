@@ -39,32 +39,48 @@ export const TWIN_TERROR: RobotDesign = {
 };
 
 /**
- * A pendulum sphere: a heavy frame hangs inside a rolling shell. Driving
- * turns the shell against the pendulum; steering tilts the pendulum sideways
- * so the ball rolls in an arc.
+ * A ball split down the middle: each half is a driven hemisphere with a
+ * rubber tread round its rim, and a heavy frame hangs between them on the
+ * axle, so the body stays upright while the halves roll. Drives like a
+ * two-wheeled robot (left and right halves), so it turns on the spot and
+ * brakes, but there is still nothing to grab and nothing to get under.
  */
+const ORB_R = 0.3;
+const hemisphere = (side: 'left' | 'right'): PartDef[] => {
+  const s = side === 'left' ? 1 : -1;
+  const name = side === 'left' ? 'Left' : 'Right';
+  return [
+    {
+      // The drive half is a big thin wheel (its rubber tread)…
+      id: `half-${side}`, label: `${name} half`, parent: 'frame', position: [0.117 * s, 0, 0], rotation: zero, role: 'wheel', wheel: 'orb-tread',
+      // Geared down and turned down (scale): drive any harder and the frame just
+      // swings up inside the ball instead of the ball rolling, and stops slowly.
+      joint: { type: 'hinge', axis: [1, 0, 0], actuator: { type: 'motor', motor: 'dm750', gear: 30, input: { source: side, scale: 0.55 } } },
+    },
+    {
+      // …with an aluminium dome bolted to it, drawn about the part's Y (turned to point outwards).
+      id: `dome-${side}`, label: `${name} dome`, parent: `half-${side}`, position: [0.004 * s, 0, 0], rotation: [0, 0, -90 * s], joint: fixed, role: 'structure',
+      shape: { type: 'lathe', segments: 40, profile: [[0, 0], [ORB_R - 0.012, 0], [ORB_R - 0.012, 0.02], [0.27, 0.08], [0.21, 0.14], [0.12, 0.18], [0, 0.195]] },
+      material: 'aluminium', wall: 4,
+    },
+  ];
+};
+
 export const ORB: RobotDesign = {
   schema: 2,
   id: 'orb',
   name: 'Orb',
-  description: 'A rolling aluminium ball with a pendulum drive inside. Nothing to grab, nothing to flip — but steering it takes practice.',
+  description: 'A ball split in two: each half is a driven wheel, with a heavy pendulum frame hanging between them. Turns on the spot, nothing to grab, nothing to get under.',
   colour: '#16a085',
+  catalog: {
+    wheels: { 'orb-tread': { id: 'orb-tread', name: '600mm rubber tread ring', mass: 2.2, cost: 160, sourcing: 'custom', swapMinutes: 20, radius: ORB_R, width: 0.012, grip: 0.9 } },
+  },
   parts: [
-    { id: 'pendulum', label: 'Pendulum frame', parent: null, position: [0, 0.18, 0], rotation: zero, joint: fixed, role: 'structure', shape: { type: 'box', size: [0.3, 0.1, 0.22] }, material: 'mildSteel', wall: 5 },
-    { id: 'ballast', label: 'Lead ballast', parent: 'pendulum', position: [0, -0.1, 0], rotation: zero, joint: fixed, role: 'component', component: { type: 'ballast', mass: 26 } },
-    { id: 'battery', label: 'Battery', parent: 'pendulum', position: [0, 0, 0.06], rotation: zero, joint: fixed, role: 'component', component: { type: 'battery', part: 'nicd24' } },
-    {
-      id: 'yoke', label: 'Tilt yoke', parent: 'pendulum', position: [0, 0.17, 0], rotation: [0, 0, 90], role: 'structure',
-      shape: { type: 'cylinder', radius: 0.025, length: 0.5 }, material: 'mildSteel',
-      joint: { type: 'hinge', axis: [0, 0, 1], limits: [-30, 30], actuator: { type: 'servo', motor: 'dm750', gear: 40, targets: [-25, 0, 25], input: { source: 'steer', scale: 1 } } },
-    },
-    {
-      id: 'shell', label: 'Shell', parent: 'yoke', position: zero, rotation: zero, role: 'structure',
-      shape: { type: 'sphere', radius: 0.35 }, material: 'aluminium', wall: 4,
-      // The yoke is turned 90° about Z, so its Y is the world's X: the axle.
-      // Too much torque and the pendulum just swings over the top instead of rolling the ball.
-      joint: { type: 'hinge', axis: [0, -1, 0], actuator: { type: 'motor', motor: 'dm750', gear: 20, input: { source: 'throttle', scale: 0.55 } } },
-    },
+    // The frame's origin is the axle; it hangs below it, inside the ball.
+    { id: 'frame', label: 'Pendulum frame', parent: null, position: [0, ORB_R, 0], rotation: zero, joint: fixed, role: 'structure', shape: { type: 'box', size: [0.2, 0.28, 0.32] }, shapeOffset: [0, -0.07, 0], material: 'aluminium', wall: 4 },
+    { id: 'ballast', label: 'Lead ballast', parent: 'frame', position: [0, -0.22, 0], rotation: zero, joint: fixed, role: 'component', component: { type: 'ballast', mass: 30 } },
+    { id: 'battery', label: 'Battery', parent: 'frame', position: [0, -0.08, 0.06], rotation: zero, joint: fixed, role: 'component', component: { type: 'battery', part: 'nicd24' } },
+    ...hemisphere('left'), ...hemisphere('right'),
   ],
 };
 
@@ -120,16 +136,16 @@ export const GYRODISC: RobotDesign = {
   parts: [
     { id: 'base', label: 'Drive base', parent: null, position: [0, 0.1, 0], rotation: zero, joint: fixed, role: 'structure', shape: armour([0.36, 0.1, 0.36], { sides: 0.03, front: 0.03, rear: 0.03, belt: 0.4 }), material: 'aluminium', wall: 5 },
     { id: 'battery', label: 'Battery', parent: 'base', position: [0, 0, -0.08], rotation: zero, joint: fixed, role: 'component', component: { type: 'battery', part: 'nicd36l' } },
-    ...(['left', 'right'] as const).map((side): PartDef => ({
-      id: `wheel-${side}`, label: `${side === 'left' ? 'Left' : 'Right'} wheel`, parent: 'base', position: [side === 'left' ? 0.22 : -0.22, 0, 0], rotation: zero, role: 'wheel', wheel: 'solid200',
-      joint: { type: 'hinge', axis: [1, 0, 0], actuator: { type: 'motor', motor: 'dm1200', gear: 18, input: { source: side, scale: 1 } } },
-    })),
-    { id: 'skid-f', label: 'Front skid', parent: 'base', position: [0, -0.064, 0.15], rotation: zero, joint: fixed, role: 'structure', shape: { type: 'sphere', radius: 0.03 }, material: 'ptfe' },
-    { id: 'skid-r', label: 'Rear skid', parent: 'base', position: [0, -0.064, -0.15], rotation: zero, joint: fixed, role: 'structure', shape: { type: 'sphere', radius: 0.03 }, material: 'ptfe' },
+    // Four-wheel skid steer: a two-wheeled base just spins round under the
+    // shell's reaction; four tyres have to scrub sideways to turn, so it holds.
+    ...(['left', 'right'] as const).flatMap((side) => ([['front', 0.12], ['rear', -0.12]] as const).map(([end, z]): PartDef => ({
+      id: `wheel-${side}-${end}`, label: `${side === 'left' ? 'Left' : 'Right'} ${end} wheel`, parent: 'base', position: [side === 'left' ? 0.24 : -0.24, 0, z], rotation: zero, role: 'wheel', wheel: 'solid200',
+      joint: { type: 'hinge', axis: [1, 0, 0], actuator: { type: 'motor', motor: 'dm1200', gear: 14, input: { source: side, scale: 1 } } },
+    }))),
     {
       id: 'shell', label: 'Spinning shell', parent: 'base', position: [0, 0.03, 0], rotation: zero, role: 'structure',
       shape: { type: 'lathe', segments: 48, profile: [[0, 0.075], [0.26, 0.07], [0.46, 0.032], [0.5, 0.012], [0.5, -0.02], [0.46, -0.05], [0.3, -0.075], [0, -0.075]] }, material: 'aluminium', wall: 6,
-      joint: { type: 'hinge', axis: [0, 1, 0], actuator: { type: 'motor', motor: 'wm2000', gear: 6, input: { source: 'button1', mode: 'toggle' } } },
+      joint: { type: 'hinge', axis: [0, 1, 0], actuator: { type: 'motor', motor: 'wm2000', gear: 6, softStart: 5, input: { source: 'button1', mode: 'toggle' } } },
     },
     { id: 'tooth-a', label: 'Tooth A', parent: 'shell', position: [0.5, 0, 0], rotation: zero, joint: fixed, role: 'structure', shape: { type: 'box', size: [0.06, 0.08, 0.05] }, material: 'hardox' },
     { id: 'tooth-b', label: 'Tooth B', parent: 'shell', position: [-0.5, 0, 0], rotation: zero, joint: fixed, role: 'structure', shape: { type: 'box', size: [0.06, 0.08, 0.05] }, material: 'hardox' },
