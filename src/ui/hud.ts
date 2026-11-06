@@ -39,7 +39,7 @@ export class Hud {
   private flashUntil = -1;
   private finaleShown = false;
 
-  constructor(private match: Match, controllers: string[]) {
+  constructor(private match: Match, controllers: string[], onPause?: () => void) {
     this.timer = h('div', { class: 'timer' }, '3:00');
     const boxes = match.competitors.map((r, i) => {
       const meta = h('div', { class: 'pmeta' });
@@ -56,6 +56,7 @@ export class Hud {
         gauges, meta, diagram.el, report);
     });
     this.help = h('div', { class: 'help' });
+    const pause = onPause && h('button', { class: 'small pause', title: 'Pause (Esc, or Start on a pad)', onclick: (e: Event) => { (e.currentTarget as HTMLElement).blur(); onPause(); } }, '❚❚ Pause');
     this.big = h('div', { class: 'big' });
     this.feed = h('div', { class: 'feed' });
     this.tags = match.robots.map((r, i) => i < match.competitors.length
@@ -64,7 +65,7 @@ export class Hud {
     this.el = h('div', { class: 'hud' },
       h('div', { class: 'topbar' }, boxes[0], this.timer, boxes[1]),
       this.big, this.feed, ...this.tags,
-      this.help);
+      h('div', { class: 'hud-corner' }, this.help, pause));
     this.applyReportMode();
   }
 
@@ -85,7 +86,7 @@ export class Hud {
 
   private applyReportMode() {
     const next = { diagram: 'full damage report', full: 'hide damage', off: 'damage diagrams' }[this.reportMode];
-    this.help.textContent = `Esc pause · Tab ${next}`;
+    this.help.textContent = `Tab: ${next}`;
     for (const d of this.diagrams) d.el.style.display = this.reportMode === 'off' ? 'none' : 'block';
     this.textClock = 0;
   }
@@ -117,7 +118,7 @@ export class Hud {
       this.timer.textContent = clock(m.duration);
       this.big.textContent = String(Math.ceil(-m.time));
     } else {
-      const left = m.duration - m.time;
+      const left = m.duration - (m.endTime ?? m.time);
       this.timer.textContent = clock(left);
       this.timer.classList.toggle('low', left < 30);
       if (m.finaleStarted && !this.finaleShown) { this.finaleShown = true; this.flashText = 'FINALE · PIT OPEN'; this.flashUntil = m.time + 2.5; }

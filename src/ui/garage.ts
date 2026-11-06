@@ -72,6 +72,7 @@ export class Garage {
   private historyAt = -1;
   private diagram = new RobotDiagram(150);
   private onKey = (e: KeyboardEvent) => this.key(e);
+  private exited = false;
 
   constructor(private host: GarageHost, initial?: RobotDesign) {
     this.draft = cloneDesign(initial ?? TEMPLATES[1]);
@@ -101,6 +102,9 @@ export class Garage {
   }
 
   private exit() {
+    // A change made just before leaving must not rebuild the bay behind the menu.
+    clearTimeout(this.rebuildTimer);
+    this.exited = true;
     window.removeEventListener('keydown', this.onKey);
     this.host.gizmo(null);
     this.host.exit();
@@ -126,6 +130,7 @@ export class Garage {
       h('span', { class: 'seg' },
         h('button', { title: 'Undo (Ctrl+Z)', disabled: this.historyAt <= 0, onclick: () => this.undo(-1) }, '↶'),
         h('button', { title: 'Redo (Ctrl+Y)', disabled: this.historyAt >= this.history.length - 1, onclick: () => this.undo(1) }, '↷')),
+      h('span', { class: 'seg' }, toggle(this.el?.classList.contains('panels-hidden') ?? false, 'Hide panels', 'Hide the side panels to see the robot (press again to bring them back)', () => { this.el.classList.toggle('panels-hidden'); this.renderTools(); })),
       this.readout);
   }
 
@@ -243,6 +248,7 @@ export class Garage {
   }
 
   private rebuild() {
+    if (this.exited) return;
     try {
       this.host.startBay(this.draft);
       this.buildError = '';
@@ -281,7 +287,8 @@ export class Garage {
     }
     saveDesign(cloneDesign(this.draft));
     const legal = isLegal(scrutineer(this.draft, this.rules));
-    this.flash(legal ? `Saved "${this.draft.name}". It's on the robot select screen.` : `Saved "${this.draft.name}" — but it won't pass scrutineering yet.`);
+    this.flash(this.buildError ? `Saved "${this.draft.name}" — but it can't be built yet, so it can't fight. ${this.buildError}`
+      : legal ? `Saved "${this.draft.name}". It's on the robot select screen.` : `Saved "${this.draft.name}" — but it won't pass scrutineering yet.`);
     if (this.tab === 'robot') this.renderEditor();
   }
 

@@ -16,16 +16,33 @@ export function controlsScreen(profiles: ControlProfile[], input: InputManager, 
   const capture = (id: string, done: (b: Binding) => void) => {
     listening = id;
     render();
-    input.captureNext((b) => { listening = null; done(b); commit(); });
+    input.captureNext((b) => { listening = null; done(b); commit(); }, () => { listening = null; render(); });
   };
+
+  /** Everything a binding does right now (only the active drive mode's actions count), for spotting clashes. */
+  function uses(): Array<{ pi: number; what: string; b: Binding }> {
+    return profiles.flatMap((p, pi) => {
+      const actions: readonly Action[] = [...(p.mode === 'tank' ? TANK_ACTIONS : DRIVE_ACTIONS), ...WEAPON_ACTIONS];
+      return [
+        ...actions.flatMap((a) => p.bindings[a].map((b) => ({ pi, what: ACTION_LABELS[a], b }))),
+        ...p.macros.flatMap((m) => (m.trigger ? [{ pi, what: `macro "${m.name}"`, b: m.trigger }] : [])),
+      ];
+    });
+  }
+
+  /** "Also Player 2 Forward" if this binding does something else too. */
+  function clash(pi: number, what: string, b: Binding): string {
+    const others = uses().filter((u) => sameBinding(u.b, b) && !(u.pi === pi && u.what === what));
+    return others.length ? `Also ${others.map((u) => `Player ${u.pi + 1} ${u.what.toLowerCase()}`).join(', ')}` : '';
+  }
 
   function bindingRow(p: ControlProfile, pi: number, action: Action) {
     const list = p.bindings[action];
     const id = `${pi}-${action}`;
     return h('div', { class: 'ctl-row' },
       h('span', { class: 'label' }, ACTION_LABELS[action]),
-      ...list.map((b, bi) => h('span', { class: 'chip' }, describeBinding(b),
-        h('button', { title: 'Remove', onclick: () => { list.splice(bi, 1); commit(); } }, '×'))),
+      ...list.map((b, bi) => { const c = clash(pi, ACTION_LABELS[action], b); return h('span', { class: c ? 'chip clash' : 'chip', title: c ? `${c} — pressing it will do both` : '' }, describeBinding(b), c && h('span', { class: 'clash-note' }, '⚠'),
+        h('button', { title: 'Remove', onclick: () => { list.splice(bi, 1); commit(); } }, '×')); }),
       listening === id
         ? h('span', { class: 'chip listening' }, 'Press a key or button… (Esc cancels)')
         : h('button', { class: 'small', onclick: () => capture(id, (b) => { if (!list.some((x) => sameBinding(x, b))) list.push(b); }) }, '+ add'));
@@ -70,6 +87,11 @@ export function controlsScreen(profiles: ControlProfile[], input: InputManager, 
       h('div', { class: 'hint' }, p.mode === 'arcade'
         ? 'Arcade: one stick or four keys — throttle and steering are mixed for you.'
         : 'Tank: each side of the robot has its own forward/reverse control, like a real two-stick transmitter.'),
+      (() => {
+        const mine = uses().filter((u) => u.pi === pi);
+        const lines = [...new Set(mine.flatMap((u) => { const c = clash(pi, u.what, u.b); return c ? [`${describeBinding(u.b)} is ${u.what.toLowerCase()} — and ${c.slice(5)}.`] : []; }))];
+        return lines.length ? h('div', { class: 'err' }, ...lines.map((l) => h('div', {}, `⚠ ${l}`))) : null;
+      })(),
       ...driveActions.map((a) => bindingRow(p, pi, a)),
       ...WEAPON_ACTIONS.map((a) => bindingRow(p, pi, a)),
       h('div', { class: 'ctl-section' },

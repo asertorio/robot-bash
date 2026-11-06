@@ -3,7 +3,7 @@ import { loadDesigns } from './data/garage';
 import { HOUSE_ROBOTS, MONSTER_HOUSE, houseLineup, type HouseSet } from './data/house';
 import { damageScale, loadSettings, saveSettings, type Settings } from './data/settings';
 import { CRASH_TEST_DUMMY, TEMPLATES } from './data/templates';
-import { loadProfiles, saveProfiles, type ControlProfile } from './input/bindings';
+import { describeBinding, loadProfiles, saveProfiles, type ControlProfile } from './input/bindings';
 import { InputManager } from './input/input';
 import { MatchView } from './render/view';
 import { CpuDriver } from './sim/ai';
@@ -27,7 +27,8 @@ class App {
   private match: Match | null = null;
   private hud: Hud | null = null;
   private cpus: (CpuDriver | null)[] = [];
-  private picks = [1, 2];
+  /** Each player's robot, by design id (indices would shift when a saved robot is deleted). */
+  private pickIds = [TEMPLATES[1].id, TEMPLATES[2].id];
   private roster: RobotDesign[] = TEMPLATES;
   private garage: Garage | null = null;
   private pickHandler: ((id: string | null) => void) | null = null;
@@ -39,7 +40,8 @@ class App {
   private lastSlowmo = -99;
   private paused = false;
   private resultShown = false;
-  private screenKeys: ((code: string) => void) | null = null;
+  /** The current screen's key handler; return true to say a pad press was dealt with. */
+  private screenKeys: ((code: string) => boolean | void) | null = null;
   private last = performance.now();
 
   start() {
@@ -56,13 +58,17 @@ class App {
     requestAnimationFrame((t) => this.frame(t));
   }
 
+  private pick(p: number): RobotDesign {
+    return this.roster.find((d) => d.id === this.pickIds[p]) ?? this.roster[Math.min(p + 1, this.roster.length - 1)];
+  }
+
   /** Two CPU robots scrapping behind the menus. */
   private attract() {
     this.beginMatch([TEMPLATES[0], TEMPLATES[2]], ['CPU', 'CPU'], true, 2);
   }
 
   private fight() {
-    this.beginMatch(this.picks.map((i) => this.roster[i]), this.controllers, false, this.houseCount);
+    this.beginMatch([0, 1].map((p) => this.pick(p)), this.controllers, false, this.houseCount);
   }
 
   /** All the house robots, both sets. */
@@ -71,7 +77,18 @@ class App {
   }
 
   private beginMatch(designs: RobotDesign[], controllers: Controller[], background = false, houseCount = 0) {
+    // Build the new fight before throwing the old one away, so a robot that
+    // can't be built leaves things as they were.
+    let match: Match;
+    try {
+      match = new Match(designs, { duration: background ? 1e9 : 180, house: HOUSE_ROBOTS.slice(0, houseCount) });
+    } catch (e) {
+      if (background) throw e;
+      alert(`That fight can't start: ${(e as Error).message}`);
+      return;
+    }
     this.match?.free();
+    this.match = match;
     this.garage = null;
     this.view.setGizmo(null);
     this.view.cameraMode = 'tv';
@@ -85,20 +102,34 @@ class App {
     });
     this.slowmo = 0;
     this.lastSlowmo = -99;
+    this.input.mode = background ? 'menu' : 'fight';
     this.cpus = controllers.map((c) => (c === 'CPU' ? new CpuDriver() : null));
     this.view.setMatch(this.match);
     this.paused = false;
     this.resultShown = false;
-    this.hud = background ? null : new Hud(this.match, controllers);
+    this.hud = background ? null : new Hud(this.match, controllers, () => this.togglePause());
     if (this.hud) mount(this.ui, this.hud.el);
     this.screenKeys = background ? this.screenKeys : (code) => this.fightKeys(code);
   }
 
   private frame(t: number) {
+    // Whatever goes wrong this frame, keep the loop going.
+    try {
+      this.tick(t);
+    } catch (e) {
+      console.error(e);
+    }
+    requestAnimationFrame((n) => this.frame(n));
+  }
+
+  private tick(t: number) {
     const dt = Math.min(0.05, (t - this.last) / 1000);
     this.last = t;
     const controls = this.input.poll(dt * 1000);
-    for (const code of this.input.takePressed()) this.screenKeys?.(code);
+    for (const code of this.input.takePressed()) {
+      if (code.startsWith('Pad')) this.padPress(code);
+      else this.screenKeys?.(code);
+    }
 
     const m = this.match;
     if (m && this.garage) {
@@ -129,13 +160,49 @@ class App {
     }
     this.view.render(this.paused ? 0 : dt);
     this.hud?.update(this.view, dt);
-    requestAnimationFrame((n) => this.frame(n));
+  }
+
+  /**
+   * A gamepad menu button. Mid-fight only Start (pause) counts — everything
+   * else is driving. Otherwise the screen gets first go (robot select uses the
+   * D-pad to change robots), then the D-pad moves between buttons, A presses,
+   * B goes back.
+   */
+  private padPress(code: string) {
+    const name = code.split(':')[1];
+    const fighting = this.hud && !this.paused && !this.resultShown;
+    if (this.garage) return;
+    if (fighting) { if (name === 'Start') this.togglePause(); return; }
+    if (this.screenKeys?.(code)) return;
+    if (name === 'Start' && this.hud && this.paused) { this.togglePause(); return; }
+    if (name === 'B' || name === 'Back') { this.screenKeys?.('Escape'); return; }
+    if (name === 'A' || name === 'Start') {
+      const el = document.activeElement;
+      if (el instanceof HTMLButtonElement && this.ui.contains(el)) el.click();
+      else this.moveFocus(1);
+      return;
+    }
+    this.moveFocus(name === 'Up' || name === 'Left' ? -1 : 1);
+  }
+
+  /** Step focus through the buttons on screen (topmost dialog first). */
+  private moveFocus(dir: 1 | -1) {
+    const layer = [...this.ui.querySelectorAll('.overlay')].pop() ?? this.ui;
+    const all = [...layer.querySelectorAll<HTMLElement>('button:not([disabled]), select')].filter((b) => b.offsetParent !== null);
+    if (!all.length) return;
+    const at = all.indexOf(document.activeElement as HTMLElement);
+    const next = all[at < 0 ? (dir > 0 ? 0 : all.length - 1) : (at + dir + all.length) % all.length];
+    this.ui.querySelector('.pad-focus')?.classList.remove('pad-focus');
+    next.classList.add('pad-focus');
+    next.focus();
   }
 
   // ---------------------------------------------------------------- screens
 
   private mainMenu() {
     this.screenKeys = null;
+    this.input.mode = 'menu';
+    const touchOnly = window.matchMedia?.('(hover: none) and (pointer: coarse)').matches;
     mount(this.ui, h('div', { class: 'screen' },
       h('h1', { class: 'title' }, 'Robot', h('br'), h('span', {}, 'Bash')),
       h('div', { class: 'tagline' }, 'Build it · Fight it · Break it'),
@@ -145,13 +212,16 @@ class App {
         h('button', { onclick: () => this.controlsScreen() }, 'Controls'),
         h('button', { onclick: () => this.settingsScreen() }, 'Settings'),
         h('button', { onclick: () => this.howToScreen() }, 'How to play')),
+      touchOnly && h('div', { class: 'touch-note' }, 'Driving needs a keyboard or a game controller — connect one to fight. You can still look round the garage.'),
       h('div', { class: 'hazard-bar' }),
       h('div', { class: 'footnote' }, 'A physics-simulated robot combat game in the spirit of the classic British TV show. Every hit is worked out from real forces — no hit points.')));
   }
 
-  private garageScreen(initial?: RobotDesign) {
+  /** The garage, optionally with a robot on the bench; `back` is where Exit goes. */
+  private garageScreen(initial?: RobotDesign, back: () => void = () => this.mainMenu()) {
     this.screenKeys = null;
     this.hud = null;
+    this.input.mode = 'garage';
     const garage = new Garage({
       startBay: (d) => {
         // Build first so a broken design leaves the old bay running.
@@ -168,7 +238,7 @@ class App {
         this.view.followIndex = 0;
       },
       bay: () => this.match,
-      exit: () => { this.garage = null; this.view.highlight(null); this.view.setGizmo(null); this.attract(); this.mainMenu(); },
+      exit: () => { this.garage = null; this.view.highlight(null); this.view.setGizmo(null); this.attract(); back(); },
       highlight: (id) => this.view.highlight(id),
       gizmo: (opts) => this.view.setGizmo(opts),
       onPick: (cb) => { this.pickHandler = cb; },
@@ -178,25 +248,34 @@ class App {
   }
 
   private selectScreen() {
+    this.input.mode = 'menu';
     const saved = loadDesigns();
     this.roster = [...TEMPLATES, ...this.allHouse, ...saved];
-    this.picks = this.picks.map((p) => Math.min(p, this.roster.length - 1));
+    this.pickIds = [0, 1].map((p) => this.pick(p).id);
     const n = () => this.roster.length;
+    const step = (p: number, d: number) => {
+      const i = this.roster.indexOf(this.pick(p));
+      this.pickIds[p] = this.roster[(i + d + n()) % n()].id;
+      render();
+    };
+    // Change robot with each player's own turn-left / turn-right keys.
+    const turnKeys = (p: number) => (['left', 'right'] as const).map((a) => this.profiles[p].bindings[a].find((b) => b.device === 'key'));
     const render = () => {
       const cards = [0, 1].map((p) => {
-        const design = this.roster[this.picks[p]];
+        const design = this.pick(p);
         const stats = computeStats(design);
         const mine = saved.includes(design);
         const house = this.allHouse.includes(design);
         const issues = scrutineer(design);
         const group = (label: string, list: RobotDesign[]) => list.length
-          ? h('optgroup', { label }, ...list.map((d) => h('option', { value: String(this.roster.indexOf(d)), selected: d === design }, d.name)))
+          ? h('optgroup', { label }, ...list.map((d) => h('option', { value: d.id, selected: d === design }, d.name)))
           : null;
         const pick = h('select', {
           class: 'robot-pick', 'aria-label': `Player ${p + 1} robot`,
-          onchange: () => { this.picks[p] = Number(pick.value); pick.blur(); render(); },
+          onchange: () => { this.pickIds[p] = pick.value; pick.blur(); render(); },
         }, group('Starter robots', TEMPLATES), group('House robots', HOUSE_ROBOTS), group('Overpowered house robots', MONSTER_HOUSE), group('Your builds', saved));
-        const cycle = (d: number) => { this.picks[p] = (this.picks[p] + d + n()) % n(); render(); };
+        const cycle = (d: number) => step(p, d);
+        const [kl, kr] = turnKeys(p);
         const setCtl = (c: Controller) => { this.controllers[p] = c; render(); };
         return h('div', { class: 'robot-card', style: `--pc:${PLAYER_COLOURS[p]}` },
           h('div', { class: 'who' }, `Player ${p + 1}`,
@@ -214,8 +293,8 @@ class App {
           house
             ? h('div', { class: 'legal' }, 'Built to house-robot rules, not the competition\'s: far over the heavyweight limit.')
             : !isLegal(issues) && h('div', { class: 'legal bad' }, `Fails heavyweight scrutineering: ${issues.find((i) => i.level === 'error')!.text}`),
-          h('div', { class: 'keys-hint' }, p === 0 ? 'A / D to change robot' : 'J / L to change robot'),
-          mine && h('button', { class: 'small', style: 'margin-top:8px', onclick: () => this.garageScreen(design) }, 'Edit in garage'));
+          h('div', { class: 'keys-hint' }, kl && kr ? `${describeBinding(kl)} / ${describeBinding(kr)} to change robot` : 'Use ◀ ▶ to change robot', ` · pad ${p + 1} D-pad`),
+          h('button', { class: 'small', style: 'margin-top:8px', onclick: () => this.garageScreen(design, () => this.selectScreen()) }, mine ? 'Edit in garage' : 'Open a copy in the garage'));
       });
       const sets: Array<[HouseSet, string]> = [['classic', 'Classic'], ['overpowered', 'Overpowered'], ['mixed', 'Mixed']];
       const setHouse = (v: HouseSet) => { this.settings.houseSet = v; saveSettings(this.settings); render(); };
@@ -231,13 +310,16 @@ class App {
           h('button', { class: 'primary', onclick: () => this.fight() }, 'Fight! (Enter)'))));
     };
     this.screenKeys = (code) => {
-      const step = (p: number, d: number) => { this.picks[p] = (this.picks[p] + d + n()) % n(); render(); };
-      if (code === 'KeyA') step(0, -1);
-      if (code === 'KeyD') step(0, 1);
-      if (code === 'KeyJ') step(1, -1);
-      if (code === 'KeyL') step(1, 1);
-      if (code === 'Enter') this.fight();
+      for (const p of [0, 1]) {
+        const [kl, kr] = turnKeys(p);
+        if (code === kl?.code || code === `Pad${p}:Left`) { step(p, -1); return true; }
+        if (code === kr?.code || code === `Pad${p}:Right`) { step(p, 1); return true; }
+      }
+      // Enter on a focused button presses that button, not Fight.
+      const focused = document.activeElement instanceof HTMLButtonElement || document.activeElement instanceof HTMLSelectElement;
+      if ((code === 'Enter' && !focused) || code.endsWith(':Start')) { this.fight(); return true; }
       if (code === 'Escape') this.mainMenu();
+      return false;
     };
     render();
   }
@@ -267,7 +349,9 @@ class App {
   }
 
   private controlsScreen() {
-    this.screenKeys = null;
+    // Esc while binding a key just cancels the binding (the capture eats it); otherwise it's Back.
+    this.screenKeys = (code) => { if (code === 'Escape') { this.input.cancelCapture(); this.mainMenu(); } };
+    this.input.mode = 'menu';
     mount(this.ui, controlsScreen(this.profiles, this.input, (p) => {
       saveProfiles(p);
       this.input.setProfiles(p);
@@ -276,27 +360,38 @@ class App {
 
   private howToScreen() {
     this.screenKeys = (code) => { if (code === 'Escape') this.mainMenu(); };
+    this.input.mode = 'menu';
     const kb = (k: string) => h('kbd', {}, k);
     mount(this.ui, h('div', { class: 'screen top' },
       h('h2', {}, 'How to play'),
       h('div', { class: 'howto' },
         h('h3', {}, 'Winning'),
         h('ul', {},
-          h('li', {}, 'Immobilise your opponent: if a robot can\'t move under its own power for a few seconds, the referee counts to 10.'),
+          h('li', {}, 'Immobilise your opponent: if a robot can\'t move under its own power for a few seconds, the referee counts to 10. Being shoved about by a house robot doesn\'t count as moving.'),
           h('li', {}, 'Throw them out of the arena, or into the pit — drive over the red pit release button to open it.'),
           h('li', {}, 'If both survive 3 minutes, the judges score aggression, control, damage and style.')),
         h('h3', {}, 'Default controls'),
         h('ul', {},
-          h('li', {}, 'Player 1: ', kb('W'), kb('A'), kb('S'), kb('D'), ' drive · ', kb('E'), ' or ', kb('Space'), ' weapon · ', kb('Q'), ' weapon 2 · ', kb('C'), ' macro'),
-          h('li', {}, 'Player 2: ', kb('I'), kb('J'), kb('K'), kb('L'), ' or arrows drive · ', kb('O'), ' or ', kb('/'), ' weapon · ', kb('U'), ' weapon 2 · ', kb('M'), ' macro'),
-          h('li', {}, 'Gamepads: left stick drives, A / RT weapon, B / LT weapon 2.'),
-          h('li', {}, kb('Esc'), ' pause · ', kb('Tab'), ' cycles the damage display: health diagrams, full report, off')),
+          h('li', {}, 'Player 1: ', kb('W'), kb('A'), kb('S'), kb('D'), ' drive · ', kb('E'), ' or ', kb('Space'), ' weapon 1 · ', kb('Q'), ' weapon 2 · ', kb('Z'), kb('X'), ' weapons 3 and 4 · ', kb('C'), ' macro'),
+          h('li', {}, 'Player 2: ', kb('I'), kb('J'), kb('K'), kb('L'), ' or arrows drive · ', kb('O'), ', ', kb('/'), ' or right ', kb('Shift'), ' weapon 1 · ', kb('U'), ' or ', kb('.'), ' weapon 2 · ', kb('H'), kb('N'), ' weapons 3 and 4 · ', kb('M'), ' macro'),
+          h('li', {}, 'Gamepads: left stick drives, A / RT weapon 1, B / LT weapon 2, X and Y weapons 3 and 4, Start pauses. In menus the D-pad moves, A picks, B goes back.'),
+          h('li', {}, kb('Esc'), ' pauses (or the Pause button) · ', kb('Tab'), ' cycles the damage display: health diagrams, full report, off'),
+          h('li', {}, 'Everything can be remapped under Controls, including tank-style steering.')),
+        h('h3', {}, 'Driving'),
+        h('ul', {},
+          h('li', {}, 'Drive keys build up to full power over a quarter of a second: tap for a small nudge, hold to charge. Let go and the motors brake.'),
+          h('li', {}, 'Spinner and drum buttons are on/off switches: press once to spin up, again to stop. Flippers, axes, crushers and rams fire while you hold the button.'),
+          h('li', {}, 'The default macro (', kb('C'), ' / ', kb('M'), ') fires weapon 1 and backs off. On a spinner that flicks it off — change it under Controls.'),
+          h('li', {}, 'Upside down? Your controls are reversed — just like the real thing. Flippers can self-right, and invertible robots (wheels poking out top and bottom) just keep going.')),
+        h('h3', {}, 'The arena'),
+        h('ul', {},
+          h('li', {}, 'House robots guard the four corner patrol zones and attack anything that strays in. Once a robot is being counted out, they come out for it. You can also pick them to fight with.'),
+          h('li', {}, 'The striped floor flipper throws whatever parks on it. The flame pit burns on a cycle: tyres and plastic cook, steel shrugs it off.')),
         h('h3', {}, 'It\'s physics, not hit points'),
         h('ul', {},
-          h('li', {}, 'Flippers are driven by gas pressure on a ram, and you only have so much gas.'),
-          h('li', {}, 'Spinners take seconds to spin up, store real energy, and lose speed every time they hit. Spinning up twists your own robot.'),
-          h('li', {}, 'Armour dents, then tears off. Hits pass through to the motors, battery and radio behind it. Lose a wheel and you\'ll drive in circles.'),
-          h('li', {}, 'Upside down? Your controls are reversed — just like the real thing. Flippers can self-right, and invertible robots (wheels poking out top and bottom) just keep going.'),
+          h('li', {}, 'Flippers are driven by gas pressure on a ram, and you only have so much gas — watch the gauge.'),
+          h('li', {}, 'Spinners take seconds to spin up, store real energy, and lose speed every time they hit.'),
+          h('li', {}, 'Armour dents, then tears off. Hard landings and big hits shake up the battery, speed controllers and motors inside. Lose a wheel and you\'ll drive in circles.'),
           h('li', {}, 'What you\'re made of matters: hardened-steel teeth bite deep into aluminium and plastic, and barely mark hardened steel. Saws and chainsaws cut as they slide; crushers and spikes pierce once they push hard enough.')),
         h('h3', {}, 'The referee'),
         h('ul', {},
@@ -313,6 +408,7 @@ class App {
   private togglePause() {
     if (!this.hud || this.resultShown) return;
     this.paused = !this.paused;
+    this.input.mode = this.paused ? 'menu' : 'fight';
     this.ui.querySelector('.overlay')?.remove();
     if (!this.paused) return;
     this.ui.append(h('div', { class: 'overlay' },
@@ -342,10 +438,11 @@ class App {
     const r = m.result;
     const winner = r.winner !== null ? m.robots[r.winner].design : null;
     const scores = r.scores;
+    this.input.mode = 'menu';
     this.ui.append(h('div', { class: 'overlay' },
       h('div', { class: 'dialog' },
-        h('div', { class: 'reason' }, 'Winner'),
-        h('div', { class: 'winner', style: `color:${winner?.colour ?? '#fff'}` }, winner?.name ?? 'Nobody'),
+        h('div', { class: 'reason' }, winner ? 'Winner' : 'Result'),
+        h('div', { class: 'winner', style: `color:${winner?.colour ?? '#fff'}` }, winner?.name ?? (scores ? 'Draw' : 'Nobody')),
         h('div', { class: 'reason' }, r.reason),
         scores && h('table', { class: 'judges' },
           h('tr', {}, h('th', {}, ''), ...m.competitors.map((rb) => h('th', {}, rb.design.name))),

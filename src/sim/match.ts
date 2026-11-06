@@ -115,6 +115,8 @@ export class Match {
   /** The finale's begun: the pit's open and the house robots are loose. */
   finaleStarted = false;
   result: MatchResult | null = null;
+  /** When the fight was decided (the clock stops there). */
+  endTime: number | null = null;
   /** Current referee count per robot (seconds), or null when not counting. */
   counts: Array<number | null>;
   eliminated: Array<string | null>;
@@ -199,7 +201,8 @@ export class Match {
     }
 
     this.competitors.forEach((r, i) => {
-      const live = this.phase !== 'countdown' && !this.eliminated[i];
+      // Hands off the sticks once it's over.
+      const live = this.phase === 'fight' && !this.eliminated[i];
       r.setControl(live ? this.controls[i] ?? NEUTRAL : NEUTRAL);
     });
     if (this.stepCount % 8 === 1) this.driveHouseRobots(8 * STEP);
@@ -459,6 +462,8 @@ export class Match {
 
   private referee(dt: number) {
     this.hazards(dt);
+    // Decided: nobody can be put out (or counted) after the result.
+    if (this.phase === 'over') return;
     if (this.finale && !this.sandbox && !this.finaleStarted && this.phase === 'fight' && this.time >= this.duration - FINALE) {
       this.finaleStarted = true;
       this.arena.pitOpen = true;
@@ -643,16 +648,25 @@ export class Match {
       });
     }
     scores.forEach((s) => (s.total = Math.round(s.total * 10) / 10));
-    let winner = 0;
-    scores.forEach((s, i) => { if (s.total > scores[winner].total) winner = i; });
-    this.finish({ winner, reason: "Judges' decision", scores });
+    // Highest total wins; a tie goes to damage, then aggression; still level is a draw.
+    const rank = (s: JudgeScore) => [s.total, s.damage, s.aggression];
+    const order = scores.map((_, i) => i).sort((a, b) => {
+      const ra = rank(scores[a]), rb = rank(scores[b]);
+      for (let k = 0; k < ra.length; k++) if (Math.abs(ra[k] - rb[k]) > 0.05) return rb[k] - ra[k];
+      return 0;
+    });
+    const [best, next] = order;
+    const level = next !== undefined && rank(scores[best]).every((v, k) => Math.abs(v - rank(scores[next])[k]) <= 0.05);
+    if (level) this.finish({ winner: null, reason: "A draw — the judges couldn't separate them", scores });
+    else this.finish({ winner: best, reason: scores[best].total - scores[next ?? best].total <= 0.05 ? "Judges' decision, on damage" : "Judges' decision", scores });
   }
 
   private finish(result: MatchResult) {
     this.phase = 'over';
     this.result = result;
-    const w = result.winner !== null ? this.robots[result.winner].design.name : 'Nobody';
-    this.say(`${w} wins! ${result.reason}`, 'major');
+    this.endTime = this.time;
+    if (result.winner === null) this.say(`${result.reason}!`, 'major');
+    else this.say(`${this.robots[result.winner].design.name} wins! ${result.reason}`, 'major');
   }
 
   private say(text: string, level: CommentaryLine['level']) {

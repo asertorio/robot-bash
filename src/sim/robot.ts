@@ -117,6 +117,7 @@ export interface Rotor {
 }
 
 const AIR_DAMPING = 0.05;
+const NEUTRAL_CONTROL: ControlState = { left: 0, right: 0, weapon: false, weapon2: false };
 /**
  * Robot-on-robot contact. Bare plate on plate is slippery, and robots bounce
  * off each other a little, so evenly matched robots slide off and come round
@@ -493,8 +494,8 @@ export class Robot {
     this.energy = Math.max(0, this.energy - (voltage * this.current * dt) / 3600);
   }
 
-  private buttonHeld(input: InputDef): boolean {
-    const c = this.control;
+  /** Is this input's weapon button down? `c` is what the receiver is passing on (nothing, with no radio). */
+  private buttonHeld(input: InputDef, c: ControlState = this.hasControl ? this.control : NEUTRAL_CONTROL): boolean {
     return { button1: c.weapon, button2: c.weapon2, button3: !!c.weapon3, button4: !!c.weapon4 }[input.source as 'button1'] ?? false;
   }
 
@@ -515,7 +516,7 @@ export class Robot {
         return v * scale;
       }
       default: {
-        const held = this.buttonHeld(i);
+        const held = this.buttonHeld(i, c);
         const pressed = held && !a.wasPressed;
         a.wasPressed = held;
         if (i.mode === 'toggle') { if (pressed) a.toggled = !a.toggled; return a.toggled ? 1 : 0; }
