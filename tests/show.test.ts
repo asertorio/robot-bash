@@ -84,7 +84,8 @@ describe('house robots', () => {
     const m = new Match([WEDGEHOG, TEMPLATES[1]], { skipCountdown: true, duration: 4, house: HOUSE_ROBOTS });
     run(m, 4.5, () => [drive(0.5, -0.5), drive(0.5, -0.5)]);
     expect(m.result?.scores).toHaveLength(2);
-    expect([0, 1]).toContain(m.result?.winner);
+    // A competitor or a draw — never a house robot.
+    expect([0, 1, null]).toContain(m.result?.winner);
     m.free();
   });
 });
