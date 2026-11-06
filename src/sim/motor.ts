@@ -13,13 +13,22 @@ export interface MotorOutput {
  * Linear brushed-DC model. Torque falls linearly from stall to zero at free
  * speed; both scale with supply voltage (over-volting a motor makes it
  * stronger and faster, as real builders did). `throttle` is −1..1 (the speed
- * controller's duty cycle), `omega` is shaft speed in rad/s.
+ * controller's duty cycle), `omega` is shaft speed in rad/s. With `brake`, a
+ * centred throttle brakes the motor rather than letting it freewheel.
  */
-export function dcMotor(spec: MotorSpec, supplyVoltage: number, throttle: number, omega: number, condition = 1): MotorOutput {
+export function dcMotor(spec: MotorSpec, supplyVoltage: number, throttle: number, omega: number, condition = 1, brake = false): MotorOutput {
   const vRatio = supplyVoltage / spec.voltage;
   const stall = spec.stallTorque * vRatio * condition;
   const free = spec.freeSpeed * RPM_TO_RADS * vRatio;
-  if (Math.abs(throttle) < 1e-3 || stall <= 0 || free <= 0) return { torque: 0, current: 0 };
+  if (stall <= 0 || free <= 0) return { torque: 0, current: 0 };
+  if (Math.abs(throttle) < 1e-3) {
+    // Sticks centred. A drive speed controller in brake mode shorts the motor,
+    // so back-EMF slows the robot to a stop instead of letting it coast
+    // (current circulates in the motor, not from the battery). Weapon
+    // controllers coast.
+    if (!brake) return { torque: 0, current: 0 };
+    return { torque: Math.max(-stall, Math.min(stall, -stall * (omega / free))), current: 0 };
+  }
   // Duty cycle scales the effective voltage, which scales the free speed;
   // back-EMF does the rest.
   const target = throttle * free;

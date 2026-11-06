@@ -12,6 +12,8 @@ const COUNTDOWN = 3;
 /** Seconds without moving under its own power before the referee starts counting. */
 const COUNT_GRACE = 4;
 const COUNT_OUT = 10;
+/** Seconds of driving under its own power a robot needs to stop a count once it's started. */
+const PROVE_MOBILE = 0.4;
 
 export type Phase = 'countdown' | 'fight' | 'over';
 
@@ -97,6 +99,7 @@ export class Match {
   private acc = 0;
   private controls: ControlState[];
   private lastSelfMove: number[];
+  private movingFor: number[];
   private tally: Tally[];
   private robotColliders: Set<number>[] = [];
   private stepCount = 0;
@@ -134,6 +137,7 @@ export class Match {
     this.counts = this.competitors.map(() => null);
     this.eliminated = this.competitors.map(() => null);
     this.lastSelfMove = this.competitors.map(() => 0);
+    this.movingFor = this.competitors.map(() => 0);
     this.tally = this.competitors.map(() => ({ aggression: 0, control: 0, damage: 0, style: 0 }));
   }
 
@@ -357,14 +361,19 @@ export class Match {
       if (this.phase !== 'fight') return;
 
       // Moving under its own power resets the count; being shoved around
-      // doesn't. Turning on the spot or shoving an opponent counts as control.
+      // doesn't. Turning on the spot or shoving an opponent counts as control,
+      // but anything a house robot does to you is not your own doing.
       const c = this.controls[i] ?? NEUTRAL;
       const v = r.chassis.linvel();
       const speed = Math.hypot(v.x, v.z);
       const trying = Math.abs(c.left) + Math.abs(c.right) > 0.2;
-      const active = speed > 0.12 || Math.abs(r.chassis.angvel().y) > 0.6 || this.touchingOpponent(i);
-      const selfMoving = trying && active && r.tractionWheels() > 0;
-      if (selfMoving) this.lastSelfMove[i] = this.time;
+      const contact = this.contacts(i);
+      const active = speed > 0.12 || Math.abs(r.chassis.angvel().y) > 0.6 || contact.opponent;
+      const selfMoving = trying && active && !contact.house && r.tractionWheels() > 0;
+      // Once the count has started, a robot has to show it really can move —
+      // a moment of drift after a house robot lets go doesn't stop the count.
+      this.movingFor[i] = selfMoving ? this.movingFor[i] + dt : 0;
+      if (selfMoving && (this.counts[i] === null || this.movingFor[i] >= PROVE_MOBILE)) this.lastSelfMove[i] = this.time;
       const still = this.time - this.lastSelfMove[i] - COUNT_GRACE;
       const was = this.counts[i];
       this.counts[i] = still > 0 ? still : null;
@@ -400,19 +409,27 @@ export class Match {
     }
   }
 
-  private touchingOpponent(i: number): boolean {
+  /** Is competitor `i` touching another competitor, and is it touching a house robot? */
+  private contacts(i: number): { opponent: boolean; house: boolean } {
     const mine = this.robotColliders[i];
-    let touching = false;
-    for (const p of this.robots[i].parts) {
-      if (touching) break;
-      if (!p.collider || p.detached) continue;
-      this.world.contactPairsWith(p.collider, (other) => {
-        if (touching || mine.has(other.handle)) return;
-        if (!this.robots.some((r, j) => j !== i && r.partFor(other))) return;
-        this.world.contactPair(p.collider!, other, (m) => { if (m.numContacts() > 0) touching = true; });
-      });
+    const out = { opponent: false, house: false };
+    const me = this.robots[i];
+    for (const p of me.parts) {
+      if (out.opponent && out.house) break;
+      if (p.detached) continue;
+      for (const c of [p.tyre, ...me.collidersOf(p)]) {
+        if (!c) continue;
+        this.world.contactPairsWith(c, (other) => {
+          if (mine.has(other.handle)) return;
+          const j = this.robots.findIndex((r, k) => k !== i && r.partFor(other));
+          if (j < 0) return;
+          const kind = j < this.competitors.length ? 'opponent' : 'house';
+          if (out[kind]) return;
+          this.world.contactPair(c, other, (m) => { if (m.numContacts() > 0) out[kind] = true; });
+        });
+      }
     }
-    return touching;
+    return out;
   }
 
   private eliminate(i: number, how: string) {

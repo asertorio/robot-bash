@@ -32,9 +32,17 @@ export interface ControlProfile {
   mode: 'arcade' | 'tank';
   /** Arcade steering strength, 0.2–1. Lower = gentler turning. */
   turnRate: number;
+  /**
+   * Seconds a drive key takes to reach full throttle (0 = instant). Keys are
+   * on/off, so this is what makes a quick tap a small nudge. Sticks are
+   * already proportional and ignore it.
+   */
+  keyRamp?: number;
   bindings: Record<Action, Binding[]>;
   macros: Macro[];
 }
+
+export const DEFAULT_KEY_RAMP = 0.25;
 
 const key = (code: string): Binding => ({ device: 'key', code });
 const btn = (pad: number, button: number): Binding => ({ device: 'padButton', pad, button });
@@ -51,6 +59,7 @@ export function defaultProfile(player: number): ControlProfile {
   return {
     mode: 'arcade',
     turnRate: 0.7,
+    keyRamp: DEFAULT_KEY_RAMP,
     bindings: {
       forward: [key(keys.f), ...extra.f, axis(pad, 1, -1)],
       back: [key(keys.b), ...extra.b, axis(pad, 1, 1)],

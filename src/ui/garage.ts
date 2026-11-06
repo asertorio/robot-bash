@@ -6,16 +6,26 @@ import { actuatorOf, childrenOf, partMass, registerCatalog, root } from '../sim/
 import { convexPieces, shapeHalf } from '../sim/shapes';
 import { importModel } from './importModel';
 import { OUTLINE_PRESETS, PROFILE_PRESETS, sketchEditor } from './sketch';
-import { NEW_PART_KINDS, blankDesign, cloneDesign, mirrorPart, newParts, removePart, validParents, type NewPartKind } from '../sim/build';
+import { NEW_PART_KINDS, blankDesign, cloneDesign, mirrorPart, newParts, removePart, scaleShape, validParents, type NewPartKind } from '../sim/build';
 import { conditionLabel } from '../sim/damage';
 import type { ActuatorDef, CustomCatalog, InputDef, InputSource, JointDef, PartDef, RobotDesign, Shape, Vec3 } from '../sim/design';
 import type { Match } from '../sim/match';
+import type { GizmoOptions } from '../render/view';
 import { BUDGETS, DEFAULT_RULES, WEIGHT_CLASSES, isLegal, scrutineer, type Rules } from '../sim/rules';
 import { computeStats } from '../sim/stats';
 import { h } from './dom';
 import { statLines } from './format';
+import { RobotDiagram, gauge, shotsLeft } from './diagram';
 
 type Tab = 'robot' | 'parts';
+/** What dragging in the 3D view does to the selected part. */
+type Tool = 'select' | 'translate' | 'rotate' | 'scale';
+const TOOLS: Array<[Tool, string, string]> = [
+  ['select', 'Select', 'Click parts to select them; drag to look around (1)'],
+  ['translate', 'Move', 'Drag the arrows to move the part, or the squares to slide it in a plane (2)'],
+  ['rotate', 'Rotate', 'Drag the rings to turn the part (3)'],
+  ['scale', 'Resize', 'Drag the handles to stretch the part along its own axes (4)'],
+];
 
 export interface GarageHost {
   /** (Re)build the test bay with this design. Throws if the design can't be built. */
@@ -24,6 +34,8 @@ export interface GarageHost {
   exit(): void;
   /** Glow this part in the 3D view. */
   highlight(partId: string | null): void;
+  /** Put drag handles on a part in the 3D view (or take them away). */
+  gizmo(opts: GizmoOptions | null): void;
   /** Let the garage hear about clicks on parts in the 3D view. */
   onPick(cb: (partId: string | null) => void): void;
 }
@@ -49,6 +61,16 @@ export class Garage {
   private rebuildTimer = 0;
   private telemetryClock = 0;
   private buildError = '';
+  private tool: Tool = 'translate';
+  private space: 'world' | 'local' = 'world';
+  private snap = true;
+  private tools: HTMLDivElement;
+  private readout: HTMLSpanElement;
+  /** Undo history: the design as JSON after each settled change. */
+  private history: string[] = [];
+  private historyAt = -1;
+  private diagram = new RobotDiagram(150);
+  private onKey = (e: KeyboardEvent) => this.key(e);
 
   constructor(private host: GarageHost, initial?: RobotDesign) {
     this.draft = cloneDesign(initial ?? TEMPLATES[1]);
@@ -60,17 +82,153 @@ export class Garage {
     this.status = h('div', { class: 'gstatus' });
     this.right = h('div', { class: 'gpanel' }, this.summary,
       h('h4', {}, 'Test bay'),
-      h('div', { class: 'hint' }, 'Drive with player 1\'s controls (W A S D; weapon buttons E, Q, Z, X). Drag to orbit, scroll to zoom, click a part to select it.'),
+      h('div', { class: 'hint' }, 'Drive with player 1\'s controls (W A S D; weapon buttons E, Q, Z, X). Click a part to select it, drag its handles to move, turn or resize it (tools 1–4), drag anywhere else to orbit, scroll to zoom. Ctrl+Z undoes, Delete removes, Ctrl+D duplicates.'),
       this.telemetry,
       h('div', { class: 'gactions' },
         h('button', { class: 'small', onclick: () => this.rebuild() }, 'Reset bay'),
         h('button', { class: 'small primary', onclick: () => this.save() }, 'Save'),
-        h('button', { class: 'small', onclick: () => this.host.exit() }, 'Exit')),
+        h('button', { class: 'small', onclick: () => this.exit() }, 'Exit')),
       this.status);
-    this.el = h('div', { class: 'garage' }, this.left, this.right);
+    this.readout = h('span', { class: 'readout' });
+    this.tools = h('div', { class: 'gtools' });
+    this.el = h('div', { class: 'garage' }, this.left, this.tools, this.right);
+    window.addEventListener('keydown', this.onKey);
     this.renderEditor();
     this.renderSummary();
+    this.renderTools();
     this.rebuild();
+  }
+
+  private exit() {
+    window.removeEventListener('keydown', this.onKey);
+    this.host.gizmo(null);
+    this.host.exit();
+  }
+
+  // ---------------------------------------------------------------- mouse tools
+
+  private renderTools() {
+    const p = this.draft.parts.find((q) => q.id === this.selected);
+    const canResize = p?.role === 'structure';
+    const toggle = (on: boolean, label: string, title: string, click: () => void) =>
+      h('button', { class: on ? 'on' : '', title, onclick: (e: Event) => { click(); (e.currentTarget as HTMLElement).blur(); } }, label);
+    this.tools.replaceChildren(
+      h('span', { class: 'seg' }, ...TOOLS.map(([t, label, title]) =>
+        h('button', {
+          class: this.tool === t ? 'on' : '', title, disabled: t === 'scale' && !canResize,
+          onclick: (e: Event) => { this.setTool(t); (e.currentTarget as HTMLElement).blur(); },
+        }, label))),
+      this.tool === 'translate' ? h('span', { class: 'seg' },
+        toggle(this.space === 'world', 'World', 'Move along the robot-on-the-floor axes', () => { this.space = 'world'; this.refreshTools(); }),
+        toggle(this.space === 'local', 'Part', "Move along the part's own (tilted) axes", () => { this.space = 'local'; this.refreshTools(); })) : '',
+      h('span', { class: 'seg' }, toggle(this.snap, 'Snap', 'Snap to 5 mm / 5° / 5% steps (off: 1 mm / 1°)', () => { this.snap = !this.snap; this.refreshTools(); })),
+      h('span', { class: 'seg' },
+        h('button', { title: 'Undo (Ctrl+Z)', disabled: this.historyAt <= 0, onclick: () => this.undo(-1) }, '↶'),
+        h('button', { title: 'Redo (Ctrl+Y)', disabled: this.historyAt >= this.history.length - 1, onclick: () => this.undo(1) }, '↷')),
+      this.readout);
+  }
+
+  private setTool(t: Tool) {
+    this.tool = t;
+    this.refreshTools();
+  }
+
+  private refreshTools() {
+    this.renderTools();
+    this.updateGizmo();
+  }
+
+  /** Point the 3D handles at the selected part with its current numbers. */
+  private updateGizmo() {
+    const p = this.draft.parts.find((q) => q.id === this.selected);
+    if (!p || this.tool === 'select' || (this.tool === 'scale' && p.role !== 'structure')) { this.host.gizmo(null); return; }
+    const mm = (v: number) => Math.round(v * 1000);
+    this.host.gizmo({
+      partId: p.id, mode: this.tool, space: this.space, snap: this.snap,
+      position: [...p.position], rotation: [...p.rotation],
+      onPose: (pos, rot, done) => {
+        if (done) { this.readout.textContent = ''; this.commitDrag(); return; }
+        if (pos) p.position = pos;
+        if (rot) p.rotation = rot;
+        this.readout.textContent = this.tool === 'rotate'
+          ? `${p.rotation.map((a) => `${Math.round(a)}°`).join(' · ')}`
+          : `X ${mm(p.position[0])} · Y ${mm(p.position[1])} · Z ${mm(p.position[2])} mm`;
+      },
+      onResize: (scale, done) => {
+        this.readout.textContent = done ? '' : `× ${scale.map((v) => v.toFixed(2)).join(' · ')}`;
+        if (!done) return;
+        if (p.shape) p.shape = scaleShape(p.shape, scale);
+        this.commitDrag();
+      },
+    });
+  }
+
+  /** A drag in the 3D view finished: show the numbers and rebuild straight away. */
+  private commitDrag() {
+    this.renderEditor();
+    this.renderSummary();
+    clearTimeout(this.rebuildTimer);
+    this.rebuild();
+  }
+
+  // ---------------------------------------------------------------- undo & keys
+
+  private record() {
+    const json = JSON.stringify(this.draft);
+    if (this.history[this.historyAt] === json) return;
+    this.history = this.history.slice(0, this.historyAt + 1);
+    this.history.push(json);
+    if (this.history.length > 200) this.history.shift();
+    this.historyAt = this.history.length - 1;
+    this.renderTools();
+  }
+
+  private undo(dir: -1 | 1) {
+    const at = this.historyAt + dir;
+    if (at < 0 || at >= this.history.length) return;
+    this.historyAt = at;
+    this.draft = JSON.parse(this.history[at]) as RobotDesign;
+    registerCatalog(this.draft);
+    if (!this.draft.parts.some((p) => p.id === this.selected)) this.selected = root(this.draft).id;
+    this.host.highlight(this.selected);
+    this.renderEditor();
+    clearTimeout(this.rebuildTimer);
+    this.rebuild();
+    this.flash(dir < 0 ? 'Undone.' : 'Redone.');
+  }
+
+  private key(e: KeyboardEvent) {
+    const t = e.target;
+    if ((t instanceof HTMLInputElement && t.type !== 'range') || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
+    const ctrl = e.ctrlKey || e.metaKey;
+    const p = this.draft.parts.find((q) => q.id === this.selected);
+    if (ctrl && e.code === 'KeyZ') { e.preventDefault(); this.undo(e.shiftKey ? 1 : -1); return; }
+    if (ctrl && e.code === 'KeyY') { e.preventDefault(); this.undo(1); return; }
+    if (ctrl && e.code === 'KeyD' && p && p.parent !== null) { e.preventDefault(); this.duplicate(p); return; }
+    if ((e.code === 'Delete' || e.code === 'Backspace') && p && p.parent !== null) { e.preventDefault(); this.remove(p); return; }
+    if (ctrl || e.altKey) return;
+    const tool = ({ Digit1: 'select', Digit2: 'translate', Digit3: 'rotate', Digit4: 'scale' } as Record<string, Tool>)[e.code];
+    if (tool && !(tool === 'scale' && p?.role !== 'structure')) this.setTool(tool);
+  }
+
+  private duplicate(p: PartDef) {
+    const d = this.draft;
+    const copy = mirrorPart(d, p.id);
+    // A mirror of a mirror is a straight copy; nudge it so it's visible.
+    const twice = mirrorPart({ ...d, parts: [...d.parts, ...copy] }, copy[0].id);
+    twice[0].position = [p.position[0] + 0.05, p.position[1], p.position[2] + 0.05];
+    twice[0].label = `${p.label} copy`;
+    d.parts.push(...twice);
+    this.select(twice[0].id);
+    this.changed(true);
+  }
+
+  private remove(p: PartDef) {
+    if (!confirm(`Remove ${p.label} and everything attached to it?`)) return;
+    const parent = p.parent!;
+    removePart(this.draft, p.id);
+    this.select(parent);
+    this.changed(true);
   }
 
   // ---------------------------------------------------------------- change plumbing
@@ -80,7 +238,7 @@ export class Garage {
     if (structural) this.renderEditor();
     this.renderSummary();
     clearTimeout(this.rebuildTimer);
-    this.rebuildTimer = window.setTimeout(() => this.rebuild(), 350);
+    this.rebuildTimer = window.setTimeout(() => this.rebuild(), 200);
   }
 
   private rebuild() {
@@ -90,7 +248,9 @@ export class Garage {
     } catch (e) {
       this.buildError = `Can't build this yet: ${(e as Error).message}`;
     }
+    this.record();
     this.renderSummary();
+    this.updateGizmo();
   }
 
   private select(id: string) {
@@ -98,6 +258,8 @@ export class Garage {
     this.tab = 'parts';
     this.host.highlight(id);
     this.renderEditor();
+    if (this.tool === 'scale' && this.draft.parts.find((p) => p.id === id)?.role !== 'structure') this.tool = 'translate';
+    this.refreshTools();
   }
 
   private load(d: RobotDesign) {
@@ -105,7 +267,9 @@ export class Garage {
     this.selected = root(this.draft).id;
     this.host.highlight(this.selected);
     this.changed(true);
+    clearTimeout(this.rebuildTimer);
     this.rebuild();
+    this.refreshTools();
   }
 
   private save() {
@@ -239,8 +403,7 @@ export class Garage {
       if (made.some((p) => actuatorOf(p)?.type === 'pneumatic') && !d.parts.some((p) => p.component?.type === 'gasTank')) {
         d.parts.push(...newParts(d, 'gasTank', root(d).id));
       }
-      this.selected = made[0].id;
-      this.host.highlight(this.selected);
+      this.select(made[0].id);
       this.changed(true);
     };
     return h('div', {},
@@ -261,17 +424,8 @@ export class Garage {
     }
     out.push(h('div', { class: 'gactions' },
       !isRoot && h('button', { class: 'small', onclick: () => { const copy = mirrorPart(d, p.id); d.parts.push(...copy); this.select(copy[0].id); this.changed(true); } }, 'Mirror copy'),
-      !isRoot && h('button', { class: 'small', onclick: () => {
-        const copy = mirrorPart(d, p.id);
-        // A mirror of a mirror is a straight copy; nudge it so it's visible.
-        const twice = mirrorPart({ ...d, parts: [...d.parts, ...copy] }, copy[0].id);
-        twice[0].position = [p.position[0] + 0.05, p.position[1], p.position[2] + 0.05];
-        twice[0].label = `${p.label} copy`;
-        d.parts.push(...twice);
-        this.select(twice[0].id);
-        this.changed(true);
-      } }, 'Duplicate'),
-      !isRoot && h('button', { class: 'small', onclick: () => { if (confirm(`Remove ${p.label} and everything attached to it?`)) { const parent = p.parent!; removePart(d, p.id); this.select(parent); this.changed(true); } } }, 'Remove'),
+      !isRoot && h('button', { class: 'small', title: 'Ctrl+D', onclick: () => this.duplicate(p) }, 'Duplicate'),
+      !isRoot && h('button', { class: 'small', title: 'Delete key', onclick: () => this.remove(p) }, 'Remove'),
       isRoot && h('span', { class: 'hint' }, 'The chassis: everything else hangs off this part.')));
 
     // What it is.
@@ -287,7 +441,7 @@ export class Garage {
 
     // Where it is.
     out.push(h('h4', {}, 'Placement'));
-    out.push(h('div', { class: 'hint' }, isRoot ? 'Relative to the floor centre. +Z is forward, +Y up, +X left.' : `Relative to ${d.parts.find((q) => q.id === p.parent)?.label}. +Z forward, +Y up, +X left.`));
+    out.push(h('div', { class: 'hint' }, `${isRoot ? 'Relative to the floor centre.' : `Relative to ${d.parts.find((q) => q.id === p.parent)?.label}.`} +Z forward, +Y up, +X left. Or drag it in the 3D view with the Move / Rotate / Resize tools.`));
     out.push(...this.vec3mm(['Left / right', 'Up / down', 'Forward / back'], p.position, -1500, 1500));
     out.push(...this.vec3deg(['Tilt (about X)', 'Turn (about Y)', 'Roll (about Z)'], p.rotation));
     if (p.role === 'structure') {
@@ -582,12 +736,14 @@ export class Garage {
     const r = m?.robots[0];
     if (!m || !r) { this.telemetry.textContent = ''; return; }
     const v = r.chassis.linvel();
+    const gauges: HTMLElement[] = [
+      gauge('Battery', r.energy / r.battery.capacity, r.powered ? `${fmt((100 * r.energy) / r.battery.capacity)}% · ${fmt(r.current)} A` : 'NO POWER'),
+    ];
+    if (r.gasCapacity) gauges.push(gauge('Gas', r.gasLeft / r.gasCapacity, `${fmt(r.gasLeft)} of ${fmt(r.gasCapacity)} g · ${shotsLeft(r)} shots`, { colour: '#6cb6e8' }));
+    for (const fl of r.flames) gauges.push(gauge('Fuel', fl.fuel / Math.max(1e-6, fl.def.fuel), `${fmt(fl.fuel, 2)} kg`, { colour: '#ff8a3a' }));
     const rows: Array<[string, string]> = [
       ['Speed', `${fmt(Math.hypot(v.x, v.z), 1)} m/s`],
-      ['Current', `${fmt(r.current)} A`],
-      ['Battery', `${fmt((100 * r.energy) / r.battery.capacity)}%${r.powered ? '' : ' — NO POWER'}`],
     ];
-    if (r.gasCapacity) rows.push(['Gas', `${fmt(r.gasLeft)} of ${fmt(r.gasCapacity)} g`]);
     for (const rot of r.rotors()) rows.push([rot.actuator.driven.label, `${fmt(rot.rpm)} rpm${rot.on ? '' : ' (off)'}`]);
     for (const a of r.actuators.filter((x) => x.def.type !== 'motor' || x.locomotion).slice(0, 6)) {
       rows.push([a.driven.label, a.joint === 'hinge' ? `${fmt((a.position * 180) / Math.PI)}°` : `${fmt(a.position * 1000)} mm`]);
@@ -597,13 +753,14 @@ export class Garage {
     const dummy = m.robots[1];
     const hurt = dummy ? dummy.parts.filter((p) => p.condition < 0.97).map((p) => `${p.label}: ${conditionLabel(p.condition)}`) : [];
     rows.push(['Dummy damage', hurt.length ? hurt.join(', ') : 'none']);
-    const mine = r.parts.filter((p) => p.condition < 0.97).map((p) => `${p.label}: ${conditionLabel(p.condition)}`);
-    rows.push(['Your damage', mine.length ? mine.join(', ') : 'none']);
-    this.telemetry.replaceChildren(h('dl', { class: 'stats' }, ...rows.flatMap(([k, val]) => [h('dt', {}, k), h('dd', {}, val)])));
+    rows.push(['Your damage', RobotDiagram.worst(r, 6) || 'none']);
+    this.diagram.draw(r);
+    this.telemetry.replaceChildren(...gauges,
+      h('div', { class: 'diagram-row' }, this.diagram.el, h('div', { class: 'hint' }, 'Your robot from above, front up. Green is healthy, red is failing, grey is gone.')),
+      h('dl', { class: 'stats' }, ...rows.flatMap(([k, val]) => [h('dt', {}, k), h('dd', {}, val)])));
   }
 }
 
-/** Change a shape's type, keeping roughly the same size. */
 /** Change a shape's type, keeping roughly the same size. */
 function convertShape(s: Shape, t: Shape['type']): Shape {
   if (s.type === t) return s;

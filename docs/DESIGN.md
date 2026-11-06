@@ -173,6 +173,11 @@ torque to the chassis. Pushing power, acceleration, top speed, wheelspin and
 "pulls to one side when a motor dies" all come out of this; nothing is scripted.
 Battery energy drains at `V × I`.
 
+With the sticks centred, a drive speed controller *brakes* (it shorts the
+motor, so back-EMF gives `τ = −τ_stall × ω/ω_free`, with no battery current)
+rather than letting the robot coast. That is what real drive ESCs do, and what
+makes a quick tap a small, controllable move. Weapon motors coast.
+
 ### Pneumatic flipper
 
 ```
@@ -213,7 +218,10 @@ can be tuned in one place.
 
 Part condition is internal state. The player sees it the way a builder would:
 in the commentary feed ("its left wheel has come off!") and in the pit damage
-report (OK / damaged / failing / destroyed), never as a health bar.
+report (OK / damaged / failing / destroyed), never as a hit-point bar. The HUD
+can also show a small plan view of each robot with every part coloured by its
+condition (green → amber → red, grey when gone); Tab cycles diagram → diagram
+and full report → off.
 
 ## Scrutineering
 
@@ -228,9 +236,11 @@ flipper plates that can't reach the floor, and very high ground clearance.
 ## Rules (per fight)
 
 - **Fight length:** 3 minutes (configurable).
-- **Immobilisation:** if a robot hasn't moved under its own power for 3 s, the
+- **Immobilisation:** if a robot hasn't moved under its own power for 4 s, the
   referee starts a 10-second count. Being shoved around while helpless doesn't
-  count as moving. Count reaches 10 → out.
+  count as moving, and nothing that happens while a house robot is touching
+  you does. Once the count has started, it takes 0.4 s of real driving to stop
+  it. Count reaches 10 → out.
 - **The pit:** drive onto the pit release button to open the pit. A robot that
   falls in is out.
 - **Out of the arena:** thrown over the wall → out.
@@ -253,6 +263,10 @@ of a full rebuild, and pit time per part.
   action.
 - Drive mixing: *arcade* (one stick: throttle + steer) or *tank* (one control
   per side), like a real RC transmitter.
+- **Key ramp:** keys are on/off, so a held drive key ramps from 30% to full
+  throttle over 0.25 s (configurable per player, 0 = instant). A tap is a
+  nudge; holding is full power. Sticks are proportional already and weapon
+  keys are never ramped.
 - **Macros:** a trigger binding runs a timed sequence, e.g.
   `weapon 150, back 300, left 200` (fire, reverse away, turn). Written as a tiny
   text format in the controls screen.

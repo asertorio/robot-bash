@@ -26,7 +26,7 @@ export interface Part {
   kind: PartKind;
   /** The design part this came from (actuators point at the part they drive). */
   def?: PartDef;
-  /** 1 = new, 0 = failed. Internal state — shown to players only as words. */
+  /** 1 = new, 0 = failed. Shown to players as words and as colours on the health diagram. */
   condition: number;
   failed: boolean;
   toughness: Toughness;
@@ -480,7 +480,7 @@ export class Robot {
     }
 
     if (a.def.type === 'motor') {
-      const out = dcMotor(a.motor!, voltage, Math.max(-1, Math.min(1, cmd)), a.speed * a.def.gear, health);
+      const out = dcMotor(a.motor!, voltage, Math.max(-1, Math.min(1, cmd)), a.speed * a.def.gear, health, a.locomotion);
       // Gearbox and bearing drag.
       const torque = out.torque * a.def.gear * GEARBOX.efficiency - a.speed * 0.004 * a.def.gear;
       this.applyTorque(a, axis, torque * dt);

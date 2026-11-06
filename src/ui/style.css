@@ -92,10 +92,11 @@ h3 { font-family: var(--display); text-transform: uppercase; letter-spacing: 0.0
 .hud .tag.house { background: rgba(20,20,24,0.8); color: #ddd; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
 .hud .tag .count { display: block; text-align: center; color: var(--danger); background: #111; font-size: 26px; margin-top: 2px; padding: 0 6px; }
 .hud .help { position: absolute; bottom: 12px; right: 12px; font-family: var(--body); font-size: 11px; color: var(--muted); background: rgba(10,11,14,0.6); padding: 4px 8px; border-radius: 3px; }
-.hud .report { position: absolute; top: 110px; left: 12px; right: 12px; display: flex; justify-content: space-between; gap: 12px; }
-.hud .report table { background: var(--panel); border-radius: 3px; padding: 8px 10px; font-family: var(--body); font-size: 12px; border-collapse: collapse; }
-.hud .report th { font-family: var(--display); text-align: left; font-size: 15px; padding-bottom: 4px; }
+.hud .report { margin-top: 6px; max-height: calc(100vh - 360px); overflow: hidden; }
+.hud .report table { font-family: var(--body); font-size: 12px; border-collapse: collapse; margin-left: auto; }
+.hud .pbox:not(.right) .report table { margin-left: 0; }
 .hud .report td { padding: 1px 8px 1px 0; }
+.hud .pbox.right .report td { padding: 1px 0 1px 8px; }
 .cond-OK { color: var(--ok); } .cond-Scuffed { color: #b7d36b; } .cond-Damaged { color: var(--warn); } .cond-Failing { color: var(--danger); } .cond-Destroyed { color: #777; text-decoration: line-through; }
 
 /* Overlays */
@@ -208,3 +209,30 @@ textarea.json { width: 100%; background: #0d0f13; color: var(--muted); border: 1
 .sketch-box { margin: 6px 0 10px; }
 .sketch { display: block; width: 100%; max-width: 330px; aspect-ratio: 1; background: #0d0f13; border: 1px solid var(--line); border-radius: 4px; cursor: crosshair; touch-action: none; }
 .spec { border-left: 3px solid var(--hazard); padding: 2px 0 4px 8px; margin: 2px 0 10px; background: rgba(242,194,0,0.04); }
+
+/* Garage mouse tools */
+.gtools { pointer-events: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; background: var(--panel); border: 2px solid var(--line); border-radius: 6px; padding: 6px 8px; max-width: min(560px, 100%); }
+.gtools .seg button { font-size: 12px; padding: 4px 10px; }
+.gtools .seg button:disabled { opacity: 0.35; cursor: default; }
+.gtools .readout { font-family: var(--body); font-size: 12px; color: var(--hazard); font-variant-numeric: tabular-nums; min-width: 1px; }
+.diagram-row { display: flex; gap: 10px; align-items: center; margin: 6px 0; }
+.diagram-row .hint { flex: 1; }
+
+/* Gauges: battery, gas, fuel */
+.gauge { display: flex; align-items: center; gap: 6px; font-family: var(--body); font-size: 12px; margin: 3px 0; }
+.gauge .glabel { width: 48px; color: var(--muted); flex: none; }
+.gauge .gbar { flex: 1; min-width: 60px; height: 8px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; }
+.gauge .gfill { display: block; height: 100%; background: var(--ok); border-radius: 4px; transition: width 0.15s linear; }
+.gauge.low .gfill { background: var(--danger); }
+.gauge.low .gtext { color: var(--danger); }
+.gauge .gtext { min-width: 58px; text-align: right; font-variant-numeric: tabular-nums; flex: none; }
+.hud .pbox .gauges { margin-top: 4px; }
+.hud .pbox .gauge .glabel { width: 32px; }
+.hud .pbox .diagram { display: block; margin-top: 6px; }
+.hud .pbox.right .diagram { margin-left: auto; }
+.hud .pbox.right .gauge { flex-direction: row-reverse; }
+.hud .pbox.right .gauge .glabel { text-align: right; }
+.hud .pbox.right .gauge .gtext { text-align: left; }
+@media (max-width: 720px) {
+  .hud .pbox .diagram { width: 72px !important; height: 72px !important; }
+}

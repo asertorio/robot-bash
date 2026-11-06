@@ -1,5 +1,5 @@
 import {
-  ACTION_LABELS, DRIVE_ACTIONS, TANK_ACTIONS, WEAPON_ACTIONS, defaultProfile, describeBinding, parseMacro, sameBinding,
+  ACTION_LABELS, DEFAULT_KEY_RAMP, DRIVE_ACTIONS, TANK_ACTIONS, WEAPON_ACTIONS, defaultProfile, describeBinding, parseMacro, sameBinding,
   type Action, type Binding, type ControlProfile,
 } from '../input/bindings';
 import type { InputManager } from '../input/input';
@@ -64,7 +64,9 @@ export function controlsScreen(profiles: ControlProfile[], input: InputManager, 
           h('button', { class: p.mode === 'arcade' ? 'on' : '', onclick: () => { p.mode = 'arcade'; commit(); } }, 'Arcade'),
           h('button', { class: p.mode === 'tank' ? 'on' : '', onclick: () => { p.mode = 'tank'; commit(); } }, 'Tank')),
         p.mode === 'arcade' && h('label', {}, 'Steering ',
-          h('input', { type: 'range', min: 0.2, max: 1, step: 0.05, value: p.turnRate, oninput: (e: Event) => { p.turnRate = Number((e.target as HTMLInputElement).value); save(profiles); } }))),
+          h('input', { type: 'range', min: 0.2, max: 1, step: 0.05, value: p.turnRate, oninput: (e: Event) => { p.turnRate = Number((e.target as HTMLInputElement).value); save(profiles); } })),
+        h('label', { title: 'How long a drive key takes to reach full power. Longer = finer control with quick taps; 0 = instant.' }, 'Key ramp ',
+          h('input', { type: 'range', min: 0, max: 0.6, step: 0.05, value: p.keyRamp ?? DEFAULT_KEY_RAMP, oninput: (e: Event) => { p.keyRamp = Number((e.target as HTMLInputElement).value); save(profiles); } }))),
       h('div', { class: 'hint' }, p.mode === 'arcade'
         ? 'Arcade: one stick or four keys — throttle and steering are mixed for you.'
         : 'Tank: each side of the robot has its own forward/reverse control, like a real two-stick transmitter.'),
