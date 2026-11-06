@@ -339,14 +339,20 @@ use the same operator.
 3. **Builder v1 (done in v0.2):** templates and blank chassis, form-based
    editing of armour panels, drive, battery and weapon; live stats and parts
    list; scrutineering against weight class and budget; test bay with a crash
-   test dummy and telemetry; save, load, and JSON import/export. *Next for the
-   builder:* drag-and-drop placement in 3D, more weapon types (lifter, axe,
-   crusher, drum), and per-part cost/availability that feeds into repairs.
+   test dummy and telemetry; save, load, and JSON import/export.
+   **Builder v2 (v0.4–v0.6):** robots as free trees of parts, joints and
+   actuators; drawn, turned and imported shapes; custom parts and materials;
+   drag handles in 3D with undo; soft-start weapon motors. *Next for the
+   builder:* per-part cost/availability that feeds into repairs.
 4. **The show (done in v0.3):** four original house robots, each confined to
    a CPZ (corner patrol zone) unless a competitor is being counted out; a kinematic floor flipper
    triggered by a robot parking on it; a cycling flame pit whose heat damages
    parts by type and material (`HEAT` in `damage.ts`); flow-limited lifter
    valves. House robots never count towards the result or the judges.
+   **v0.6:** shock damage from landings and slams, a CPU that times its
+   weapons, house robots selectable as competitors, and thirteen starter
+   robots covering wedges, flippers, spinners, drums, discs, axes, crushers,
+   rams, lifters, a walker and a rolling ball.
    *Later:* wall spikes/grinders, house-robot weapons beyond lifters and
    spinners (crusher, flame thrower), and the pit being usable by house robots
    to finish victims.
@@ -354,5 +360,5 @@ use the same operator.
    gauntlet, trials), pit repairs limited by time, budget and spares.
 6. **Campaign:** progression and unlocks; restricted weapons (fire, etc.) in
    special classes.
-7. **Full freedom:** free-form chassis shapes, all materials, AI-assisted design
-   from a description or sketch (a model emits a RobotDesign).
+7. **Full freedom:** AI-assisted design from a description or sketch (a model
+   emits a RobotDesign). Free-form shapes and materials are done (v0.4).
