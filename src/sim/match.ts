@@ -1,8 +1,10 @@
 import RAPIER from '@dimforge/rapier3d-compat';
-import { Arena, flamePitRect, floorFlipperRect, inRect } from './arena';
+import { hardnessOf, material } from '../data/materials';
+import { ARENA, Arena, flamePitRect, floorFlipperRect, inRect } from './arena';
 import { NEUTRAL, type ControlState } from './control';
 import type { RobotDesign } from './design';
 import { HOUSE_CORNERS, HouseDriver, zoneCentre } from './house';
+import { CUT, PIERCE, cutRatio, edgeFactor, impactShare, pierceForce } from './damage';
 import { Robot, type Part } from './robot';
 import { vadd, vcross, vdot, vlen, vscale, vsub, type V3 } from './vmath';
 
@@ -14,6 +16,12 @@ const COUNT_GRACE = 4;
 const COUNT_OUT = 10;
 /** Seconds of driving under its own power a robot needs to stop a count once it's started. */
 const PROVE_MOBILE = 0.4;
+/** Seconds two robots can be locked together going nowhere before the referee breaks them up. */
+const STALEMATE = 5;
+/** The last this many seconds of a fight are the finale (when that's switched on). */
+const FINALE = 30;
+/** Impacts this big (J) are big hits: slow motion, camera shake, the crowd goes wild. */
+export const BIG_HIT = 1500;
 
 export type Phase = 'countdown' | 'fight' | 'over';
 
@@ -71,6 +79,18 @@ export interface MatchOptions {
   sandbox?: boolean;
   /** House robots, one per corner patrol zone (up to four). */
   house?: RobotDesign[];
+  /** Multiplies all damage (1 = realistic). */
+  damageScale?: number;
+  /** The referee pulls apart robots locked together going nowhere (default on). */
+  breaks?: boolean;
+  /** Last 30 seconds: the pit opens and the house robots leave their corners. */
+  finale?: boolean;
+}
+
+/** One robot's part grinding on another's: who, what, and how it's going. */
+interface Wear {
+  robot: Robot;
+  part: Part;
 }
 
 export class Match {
@@ -90,6 +110,10 @@ export class Match {
   biggestHit: { energy: number; time: number; parts: string } | null = null;
   /** Hard hits since the renderer last looked (for sparks). */
   impacts: Array<{ point: V3; energy: number }> = [];
+  /** Big hits between competitors since the app last looked (slow motion, camera shake). */
+  bigHits: Array<{ point: V3; energy: number }> = [];
+  /** The finale's begun: the pit's open and the house robots are loose. */
+  finaleStarted = false;
   result: MatchResult | null = null;
   /** Current referee count per robot (seconds), or null when not counting. */
   counts: Array<number | null>;
@@ -111,6 +135,13 @@ export class Match {
   private lastTorch = new Map<string, number>();
   /** Who last touched each robot, and when (for crediting landing damage). */
   private lastHitBy = new Map<Robot, { robot: Robot; time: number; y: number; peak: number }>();
+  private damageScale: number;
+  private breaks: boolean;
+  private finale: boolean;
+  /** How long each pair of competitors has been locked together going nowhere. */
+  private locked = new Map<string, number>();
+  private lastCutSay = new Map<string, number>();
+  private lastBigSay = -99;
 
   constructor(designs: RobotDesign[], opts: MatchOptions = {}) {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -124,6 +155,10 @@ export class Match {
       { pos: { x: 3.5, y: 0.01, z: 0 }, yaw: -Math.PI / 2 },
     ];
     this.competitors = designs.map((d, i) => new Robot(this.world, d, i, spawns[i].pos, spawns[i].yaw));
+    this.damageScale = opts.damageScale ?? 1;
+    this.breaks = opts.breaks ?? true;
+    this.finale = opts.finale ?? false;
+    for (const r of this.competitors) r.damageScale = this.damageScale;
     this.houseRobots = (opts.house ?? []).slice(0, 4).map((d, k) => {
       const zone = HOUSE_CORNERS[k];
       const home = zoneCentre(zone);
@@ -237,7 +272,16 @@ export class Match {
       if (!point || !normal) return;
       const v1 = this.preVelocity(c1, point, snap);
       const v2 = this.preVelocity(c2, point, snap);
-      const closing = Math.abs(vdot(vsub(v1, v2), normal));
+      const rel = vsub(v1, v2);
+      const along = vdot(rel, normal);
+      const closing = Math.abs(along);
+      // Saws and spikes work on steady contact as well as impacts.
+      if (owner1 && owner2 && owner1.robot !== owner2.robot) {
+        const slide = vlen(vsub(rel, vscale(normal, along)));
+        const force = e.totalForceMagnitude();
+        this.wear(owner1, owner2, force, slide, point);
+        this.wear(owner2, owner1, force, slide, point);
+      }
       const energy = 0.5 * impulse * closing;
       if (energy < 1) return;
       if (energy > 150 && this.impacts.length < 64) this.impacts.push({ point, energy });
@@ -250,19 +294,34 @@ export class Match {
         ep = { energy: 0, start: this.time, last: this.time };
         this.episodes.set(key, ep);
       }
-      // Robot on robot, each side soaks up half. Against the arena (a
+      // Robot on robot, the softer side soaks up more, and a sharp edge
+      // concentrates the blow (see EDGE in damage.ts). Against the arena (a
       // massive steel structure) the robot is what gives, so it takes it all.
-      const share = owner1 && owner2 ? 0.5 : 1;
-      const prior = ep.energy * share;
+      let share1 = 1, share2 = 1;
+      if (owner1 && owner2) {
+        const p1 = owner1.part, p2 = owner2.part;
+        share1 = impactShare(p1.material, p2.material) * edgeFactor(p2.edge, p2.material, p1.material);
+        share2 = impactShare(p2.material, p1.material) * edgeFactor(p1.edge, p1.material, p2.material);
+      }
+      const prior1 = ep.energy * share1, prior2 = ep.energy * share2;
+      const before = ep.energy;
       ep.energy += energy;
       ep.last = this.time;
+      if (owner1 && owner2 && owner1.robot !== owner2.robot && before < BIG_HIT && ep.energy >= BIG_HIT && this.phase === 'fight') {
+        this.bigHits.push({ point, energy: ep.energy });
+        if (ep.energy > 3000 && this.time - this.lastBigSay > 4) {
+          this.lastBigSay = this.time;
+          const [hitter, hit] = owner1.part.edge !== 'blunt' ? [owner1, owner2] : [owner2, owner1];
+          this.say(BIG_LINES[Math.floor(this.time * 7) % BIG_LINES.length](hitter.robot.design.name, hit.robot.design.name), 'major');
+        }
+      }
       if (ep.energy > 20 && ep.energy > (this.biggestHit?.energy ?? 0) && (owner1 || owner2)) {
         const names = [owner1, owner2].filter(Boolean).map((o) => `${o!.robot.design.name} ${o!.part.label.toLowerCase()}`);
         this.biggestHit = { energy: ep.energy, time: this.time, parts: names.join(' vs ') };
       }
 
-      const loss1 = owner1 ? owner1.robot.absorb(owner1.part, energy * share, point, prior) : 0;
-      const loss2 = owner2 ? owner2.robot.absorb(owner2.part, energy * share, point, prior) : 0;
+      const loss1 = owner1 ? owner1.robot.absorb(owner1.part, energy * share1, point, prior1) : 0;
+      const loss2 = owner2 ? owner2.robot.absorb(owner2.part, energy * share2, point, prior2) : 0;
       if (this.phase !== 'fight') return;
       // Only competitor-on-competitor damage impresses the judges.
       const t1 = owner1 && this.tally[owner1.robot.index], t2 = owner2 && this.tally[owner2.robot.index];
@@ -275,6 +334,47 @@ export class Match {
         }
       }
     });
+  }
+
+  /**
+   * `att`'s part working on `def`'s part over this step: saws cut as they
+   * slide (and chainsaws as their chain runs), spikes pierce once they push
+   * hard enough. Credits the damage with the judges.
+   */
+  private wear(att: Wear, def: Wear, force: number, slide: number, point: V3) {
+    const a = att.part, d = def.part;
+    if (a.detached || d.detached || a.failed || def.robot === att.robot) return;
+    let loss = 0;
+    let verb = '';
+    if (a.edge === 'saw') {
+      const speed = slide + att.robot.chainRunning(a);
+      if (speed > 1.5) {
+        const ratio = Math.min(d.kind === 'wheel' ? 4 : CUT.MAX_RATIO, cutRatio(a.material, d.material));
+        const power = CUT.K * force * speed * ratio;
+        loss = def.robot.cut(d, (power * STEP) / d.toughness.capacity, point);
+        verb = ratio < 0.6 ? 'skating off' : ratio > 2.5 ? 'slicing through' : 'cutting into';
+        if (loss > 0 && Math.random() < 0.25 && this.impacts.length < 64) this.impacts.push({ point, energy: 60 + Math.min(600, power / 20) });
+      }
+    } else if (a.edge === 'spike') {
+      const fp = pierceForce(d.material, d.thickness);
+      if (force > fp) {
+        const over = Math.min(PIERCE.MAX_OVERLOAD, force / fp - 1);
+        const bite = Math.sqrt(Math.max(0.05, Math.min(4, hardnessOf(material(a.material)) / hardnessOf(material(d.material)))));
+        loss = def.robot.cut(d, PIERCE.RATE * over * bite * STEP, point);
+        verb = 'punching into';
+      }
+    }
+    if (loss <= 0) return;
+    const ti = att.robot.index < this.tally.length ? this.tally[att.robot.index] : null;
+    if (ti && def.robot.index < this.tally.length && this.phase === 'fight') ti.damage += loss;
+    const key = `${att.robot.index}>${def.robot.index}`;
+    if (this.time - (this.lastCutSay.get(key) ?? -99) > 5 && this.phase !== 'countdown') {
+      this.lastCutSay.set(key, this.time);
+      const tool = a.def?.chain ? 'chainsaw' : a.edge === 'saw' ? 'saw' : lowerFirst(a.label);
+      const metal = SHORT_NAMES[d.material] ?? material(d.material).name.toLowerCase();
+      const what = d.kind === 'wheel' ? 'a tyre' : d.label.toLowerCase().includes(metal.split('-')[0]) ? lowerFirst(d.label) : `${metal} ${lowerFirst(d.label)}`;
+      this.say(`${att.robot.design.name}'s ${tool} is ${verb} ${def.robot.design.name}'s ${what}!`, 'info');
+    }
   }
 
   private owner(c: RAPIER.Collider): { robot: Robot; part: Part } | null {
@@ -300,9 +400,11 @@ export class Match {
       for (const h of this.houseRobots) h.setControl(NEUTRAL);
       return;
     }
-    // Counted-out robots (still in the arena) are fair game for everyone.
-    const victims = this.competitors.filter((_, i) => this.eliminated[i] === 'immobilised' || (this.counts[i] ?? 0) > 3);
+    // Counted-out robots (still in the arena) are fair game for everyone —
+    // and in the finale, so is everybody.
     const fighting = this.competitors.filter((_, i) => !this.eliminated[i]);
+    const victims = this.finaleStarted ? [...fighting, ...this.competitors.filter((_, i) => this.eliminated[i] === 'immobilised')]
+      : this.competitors.filter((_, i) => this.eliminated[i] === 'immobilised' || (this.counts[i] ?? 0) > 3);
     this.houseRobots.forEach((h, k) => h.setControl(this.houseDrivers[k].update(h, fighting, victims, dt)));
   }
 
@@ -357,6 +459,12 @@ export class Match {
 
   private referee(dt: number) {
     this.hazards(dt);
+    if (this.finale && !this.sandbox && !this.finaleStarted && this.phase === 'fight' && this.time >= this.duration - FINALE) {
+      this.finaleStarted = true;
+      this.arena.pitOpen = true;
+      this.say(this.houseRobots.length ? 'Thirty seconds left — the pit is open and the house robots are loose!' : 'Thirty seconds left — the pit is open!', 'major');
+    }
+    if (this.breaks && this.phase === 'fight') this.checkStalemates(dt);
     const alive = () => this.competitors.filter((_, i) => !this.eliminated[i]);
     this.competitors.forEach((r, i) => {
       if (this.eliminated[i]) return;
@@ -423,6 +531,54 @@ export class Match {
         this.judge();
       }
     }
+  }
+
+  /**
+   * Two robots shoving nose to nose, both trying, neither going anywhere: after
+   * a while the referee calls a break and pulls them apart, as real fight
+   * referees do. Something actually happening (one lifting the other, a
+   * weapon doing damage) keeps things moving, so this only catches mashing.
+   */
+  private checkStalemates(dt: number) {
+    const live = this.competitors.filter((_, i) => !this.eliminated[i]);
+    for (let a = 0; a < live.length; a++) {
+      for (let b = a + 1; b < live.length; b++) {
+        const r1 = live[a], r2 = live[b];
+        const key = `${r1.index}:${r2.index}`;
+        const c1 = this.controls[r1.index] ?? NEUTRAL, c2 = this.controls[r2.index] ?? NEUTRAL;
+        const trying = (c: ControlState) => Math.abs(c.left) + Math.abs(c.right) > 0.3;
+        const slow = (r: Robot) => { const v = r.chassis.linvel(); return Math.hypot(v.x, v.z) < 0.2 && Math.abs(r.chassis.angvel().y) < 0.5; };
+        const close = vlen(vsub({ ...r1.position, y: 0 }, { ...r2.position, y: 0 })) < 1.3;
+        const grounded = r1.position.y < 0.4 && r2.position.y < 0.4;
+        const mashing = close && grounded && trying(c1) && trying(c2) && slow(r1) && slow(r2) && this.touching(r1.index, r2);
+        const t = mashing ? (this.locked.get(key) ?? 0) + dt : Math.max(0, (this.locked.get(key) ?? 0) - dt * 2);
+        this.locked.set(key, t);
+        if (t < STALEMATE) continue;
+        this.locked.set(key, 0);
+        this.separate(r1, r2);
+      }
+    }
+  }
+
+  private touching(i: number, other: Robot): boolean {
+    return this.contacts(i).touching === other;
+  }
+
+  /** The referee's break: both robots back off to arm's length, facing each other. */
+  private separate(r1: Robot, r2: Robot) {
+    const d = vsub({ ...r2.position, y: 0 }, { ...r1.position, y: 0 });
+    const len = vlen(d) || 1;
+    const dir = vscale(d, 1 / len);
+    const gap = Math.max(0, 1.6 - len) / 2;
+    const lim = ARENA.half - 0.7;
+    const clamp = (p: V3, shift: V3): V3 => {
+      const q = vadd(p, shift);
+      return { x: Math.max(-lim, Math.min(lim, q.x)) - p.x, y: 0.03, z: Math.max(-lim, Math.min(lim, q.z)) - p.z };
+    };
+    r1.shift(clamp(r1.position, vscale(dir, -gap)));
+    r2.shift(clamp(r2.position, vscale(dir, gap)));
+    for (const r of [r1, r2]) this.lastSelfMove[r.index] = this.time;
+    this.say(`Stalemate! The referee breaks up ${r1.design.name} and ${r2.design.name}.`, 'info');
   }
 
   /** Is competitor `i` touching another competitor, and is it touching a house robot? */
@@ -508,6 +664,21 @@ export class Match {
     this.events.free();
   }
 }
+
+const SHORT_NAMES: Record<string, string> = {
+  aluminium: 'aluminium', mildSteel: 'steel', hardox: 'hardened-steel', titanium: 'titanium', hdpe: 'plastic',
+  polycarbonate: 'polycarbonate', rubber: 'rubber', ptfe: 'PTFE', plywood: 'plywood',
+};
+
+const lowerFirst = (s: string): string => s.charAt(0).toLowerCase() + s.slice(1);
+
+/** What the commentator says about a big hit. */
+const BIG_LINES: Array<(a: string, b: string) => string> = [
+  (a, b) => `Oof! ${a} lands a massive hit on ${b}!`,
+  (a, b) => `What a hit from ${a}! ${b} felt that one.`,
+  (a, b) => `${b} takes a huge blow from ${a}!`,
+  (a) => `${a} connects — the whole arena shook!`,
+];
 
 /** Join a robot name and an event fragment into a sentence. */
 function phrase(name: string, text: string): string {

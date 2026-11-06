@@ -1,13 +1,14 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { loadDesigns } from './data/garage';
-import { HOUSE_ROBOTS } from './data/house';
+import { HOUSE_ROBOTS, MONSTER_HOUSE, houseLineup, type HouseSet } from './data/house';
+import { damageScale, loadSettings, saveSettings, type Settings } from './data/settings';
 import { CRASH_TEST_DUMMY, TEMPLATES } from './data/templates';
 import { loadProfiles, saveProfiles, type ControlProfile } from './input/bindings';
 import { InputManager } from './input/input';
 import { MatchView } from './render/view';
 import { CpuDriver } from './sim/ai';
 import type { RobotDesign } from './sim/design';
-import { Match } from './sim/match';
+import { BIG_HIT, Match } from './sim/match';
 import { isLegal, scrutineer } from './sim/rules';
 import { computeStats } from './sim/stats';
 import { controlsScreen } from './ui/controls';
@@ -32,6 +33,10 @@ class App {
   private pickHandler: ((id: string | null) => void) | null = null;
   private controllers: Controller[] = ['Human', 'CPU'];
   private houseCount = 2;
+  private settings: Settings = loadSettings();
+  /** Real seconds of slow motion left, and when the last one started. */
+  private slowmo = 0;
+  private lastSlowmo = -99;
   private paused = false;
   private resultShown = false;
   private screenKeys: ((code: string) => void) | null = null;
@@ -60,12 +65,26 @@ class App {
     this.beginMatch(this.picks.map((i) => this.roster[i]), this.controllers, false, this.houseCount);
   }
 
+  /** All the house robots, both sets. */
+  private get allHouse(): RobotDesign[] {
+    return [...HOUSE_ROBOTS, ...MONSTER_HOUSE];
+  }
+
   private beginMatch(designs: RobotDesign[], controllers: Controller[], background = false, houseCount = 0) {
     this.match?.free();
     this.garage = null;
     this.view.setGizmo(null);
     this.view.cameraMode = 'tv';
-    this.match = new Match(designs, { duration: background ? 1e9 : 180, house: HOUSE_ROBOTS.slice(0, houseCount) });
+    const st = this.settings;
+    this.match = new Match(designs, {
+      duration: background ? 1e9 : st.fightLength,
+      house: (background ? HOUSE_ROBOTS : houseLineup(st.houseSet)).slice(0, houseCount),
+      damageScale: background ? 1 : damageScale(st),
+      breaks: st.breaks,
+      finale: !background && st.finale,
+    });
+    this.slowmo = 0;
+    this.lastSlowmo = -99;
     this.cpus = controllers.map((c) => (c === 'CPU' ? new CpuDriver() : null));
     this.view.setMatch(this.match);
     this.paused = false;
@@ -92,7 +111,18 @@ class App {
         if (cpu) return cpu.update(r, m.competitors.find((_, j) => j !== i && !m.eliminated[j]), m.arena.pitOpen, dt);
         return live[i] ?? { left: 0, right: 0, weapon: false, weapon2: false };
       });
-      m.update(dt, inputs);
+      // Slow motion for a moment after a really big hit (real time keeps running for the timer).
+      if (this.hud) {
+        for (const hit of m.bigHits) {
+          if (this.settings.shake) this.view.shake(Math.min(1, hit.energy / 8000));
+          this.hud.bigHit(hit.energy);
+          if (this.settings.slowMotion && hit.energy > BIG_HIT * 2 && m.time - this.lastSlowmo > 4) { this.slowmo = 0.9; this.lastSlowmo = m.time; }
+        }
+      }
+      m.bigHits.length = 0;
+      const scale = this.slowmo > 0 ? 0.25 : 1;
+      this.slowmo -= dt;
+      m.update(dt * scale, inputs);
       // Attract mode: restart once something interesting has happened.
       if (!this.hud && (m.phase === 'over' || m.time > 60)) this.attract();
       if (this.hud && m.result && !this.resultShown && m.time > 0) this.showResultSoon();
@@ -113,6 +143,7 @@ class App {
         h('button', { class: 'primary', onclick: () => this.selectScreen() }, 'Fight'),
         h('button', { onclick: () => this.garageScreen() }, 'Garage'),
         h('button', { onclick: () => this.controlsScreen() }, 'Controls'),
+        h('button', { onclick: () => this.settingsScreen() }, 'Settings'),
         h('button', { onclick: () => this.howToScreen() }, 'How to play')),
       h('div', { class: 'hazard-bar' }),
       h('div', { class: 'footnote' }, 'A physics-simulated robot combat game in the spirit of the classic British TV show. Every hit is worked out from real forces — no hit points.')));
@@ -148,7 +179,7 @@ class App {
 
   private selectScreen() {
     const saved = loadDesigns();
-    this.roster = [...TEMPLATES, ...HOUSE_ROBOTS, ...saved];
+    this.roster = [...TEMPLATES, ...this.allHouse, ...saved];
     this.picks = this.picks.map((p) => Math.min(p, this.roster.length - 1));
     const n = () => this.roster.length;
     const render = () => {
@@ -156,7 +187,7 @@ class App {
         const design = this.roster[this.picks[p]];
         const stats = computeStats(design);
         const mine = saved.includes(design);
-        const house = HOUSE_ROBOTS.includes(design);
+        const house = this.allHouse.includes(design);
         const issues = scrutineer(design);
         const group = (label: string, list: RobotDesign[]) => list.length
           ? h('optgroup', { label }, ...list.map((d) => h('option', { value: String(this.roster.indexOf(d)), selected: d === design }, d.name)))
@@ -164,7 +195,7 @@ class App {
         const pick = h('select', {
           class: 'robot-pick', 'aria-label': `Player ${p + 1} robot`,
           onchange: () => { this.picks[p] = Number(pick.value); pick.blur(); render(); },
-        }, group('Starter robots', TEMPLATES), group('House robots', HOUSE_ROBOTS), group('Your builds', saved));
+        }, group('Starter robots', TEMPLATES), group('House robots', HOUSE_ROBOTS), group('Overpowered house robots', MONSTER_HOUSE), group('Your builds', saved));
         const cycle = (d: number) => { this.picks[p] = (this.picks[p] + d + n()) % n(); render(); };
         const setCtl = (c: Controller) => { this.controllers[p] = c; render(); };
         return h('div', { class: 'robot-card', style: `--pc:${PLAYER_COLOURS[p]}` },
@@ -186,12 +217,15 @@ class App {
           h('div', { class: 'keys-hint' }, p === 0 ? 'A / D to change robot' : 'J / L to change robot'),
           mine && h('button', { class: 'small', style: 'margin-top:8px', onclick: () => this.garageScreen(design) }, 'Edit in garage'));
       });
+      const sets: Array<[HouseSet, string]> = [['classic', 'Classic'], ['overpowered', 'Overpowered'], ['mixed', 'Mixed']];
+      const setHouse = (v: HouseSet) => { this.settings.houseSet = v; saveSettings(this.settings); render(); };
       mount(this.ui, h('div', { class: 'screen top' },
         h('h2', {}, 'Choose your robots'),
         h('div', { class: 'select-row' }, ...cards),
         h('div', { class: 'house-row' }, h('span', {}, 'House robots'),
-          h('span', { class: 'seg' }, ...[0, 2, 4].map((n) => h('button', { class: this.houseCount === n ? 'on' : '', onclick: () => { this.houseCount = n; render(); } }, n === 0 ? 'Off' : String(n)))),
-          h('span', { class: 'hint' }, this.houseCount ? HOUSE_ROBOTS.slice(0, this.houseCount).map((d) => d.name).join(', ') + ' guard the corner patrol zones.' : 'No house robots — just you two.')),
+          h('span', { class: 'seg' }, ...[0, 1, 2, 4].map((n) => h('button', { class: this.houseCount === n ? 'on' : '', onclick: () => { this.houseCount = n; render(); } }, n === 0 ? 'Off' : String(n)))),
+          this.houseCount > 0 && h('span', { class: 'seg' }, ...sets.map(([v, label]) => h('button', { class: this.settings.houseSet === v ? 'on' : '', onclick: () => setHouse(v) }, label))),
+          h('span', { class: 'hint' }, this.houseCount ? houseLineup(this.settings.houseSet).slice(0, this.houseCount).map((d) => d.name).join(', ') + ' guard the corner patrol zones.' : 'No house robots — just you two.')),
         h('div', { class: 'actions' },
           h('button', { onclick: () => this.mainMenu() }, 'Back'),
           h('button', { class: 'primary', onclick: () => this.fight() }, 'Fight! (Enter)'))));
@@ -205,6 +239,30 @@ class App {
       if (code === 'Enter') this.fight();
       if (code === 'Escape') this.mainMenu();
     };
+    render();
+  }
+
+  private settingsScreen() {
+    this.screenKeys = (code) => { if (code === 'Escape') this.mainMenu(); };
+    const st = this.settings;
+    const set = <K extends keyof Settings>(k: K, v: Settings[K]) => { st[k] = v; saveSettings(st); render(); };
+    const row = <K extends keyof Settings>(label: string, k: K, options: Array<[Settings[K], string]>, hint: string) =>
+      h('div', { class: 'setting' },
+        h('div', { class: 'slabel' }, label),
+        h('span', { class: 'seg' }, ...options.map(([v, text]) => h('button', { class: st[k] === v ? 'on' : '', onclick: () => set(k, v) }, text))),
+        h('div', { class: 'hint' }, hint));
+    const onOff: Array<[boolean, string]> = [[true, 'On'], [false, 'Off']];
+    const render = () => mount(this.ui, h('div', { class: 'screen top' },
+      h('h2', {}, 'Settings'),
+      h('div', { class: 'settings' },
+        row('Damage', 'damage', [['realistic', 'Realistic'], ['brutal', 'Brutal']], 'Brutal doubles every hit: armour tears off sooner and more fights end in a knockout.'),
+        row('Fight length', 'fightLength', [[90, '1:30'], [180, '3:00'], [300, '5:00']], 'How long until the judges decide.'),
+        row('Finale', 'finale', onOff, 'In the last 30 seconds the pit opens and the house robots leave their corners and come for everyone.'),
+        row('Referee breaks', 'breaks', onOff, 'Two robots shoving nose to nose and going nowhere for 5 seconds get pulled apart by the referee.'),
+        row('House robots', 'houseSet', [['classic', 'Classic'], ['overpowered', 'Overpowered'], ['mixed', 'Mixed']], 'Overpowered: a 1.3 m full-body spinner, a 125 kN hydraulic spike, a giant clamp-lifter and a flame-throwing flipper.'),
+        row('Slow motion', 'slowMotion', onOff, 'Time slows for a moment after a really big hit.'),
+        row('Camera shake', 'shake', onOff, 'The camera shakes on big hits.')),
+      h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: () => this.mainMenu() }, 'Back'))));
     render();
   }
 
@@ -238,7 +296,12 @@ class App {
           h('li', {}, 'Flippers are driven by gas pressure on a ram, and you only have so much gas.'),
           h('li', {}, 'Spinners take seconds to spin up, store real energy, and lose speed every time they hit. Spinning up twists your own robot.'),
           h('li', {}, 'Armour dents, then tears off. Hits pass through to the motors, battery and radio behind it. Lose a wheel and you\'ll drive in circles.'),
-          h('li', {}, 'Upside down? Your controls are reversed — just like the real thing. Flippers can self-right.'))),
+          h('li', {}, 'Upside down? Your controls are reversed — just like the real thing. Flippers can self-right, and invertible robots (wheels poking out top and bottom) just keep going.'),
+          h('li', {}, 'What you\'re made of matters: hardened-steel teeth bite deep into aluminium and plastic, and barely mark hardened steel. Saws and chainsaws cut as they slide; crushers and spikes pierce once they push hard enough.')),
+        h('h3', {}, 'The referee'),
+        h('ul', {},
+          h('li', {}, 'Locked together nose to nose for 5 seconds, going nowhere? The referee breaks you up.'),
+          h('li', {}, 'With the finale on, the last 30 seconds open the pit and let the house robots loose. Try the Overpowered house robots in Settings if you\'re feeling brave.'))),
       h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: () => this.mainMenu() }, 'Back'))));
   }
 

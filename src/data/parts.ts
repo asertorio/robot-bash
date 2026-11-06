@@ -48,6 +48,13 @@ export interface RamSpec extends CatalogPart {
   stroke: number;
   /** bar */
   maxPressure: number;
+  /**
+   * Hydraulic: an electric pump drives oil, so there's no gas to run out of —
+   * but it's slow (pair it with a hydraulic valve) and it draws `pumpCurrent`
+   * amps from the battery while it works.
+   */
+  hydraulic?: boolean;
+  pumpCurrent?: number;
 }
 
 export interface ValveSpec extends CatalogPart {
@@ -160,6 +167,14 @@ export const RAMS: Record<string, RamSpec> = {
     id: 'ram80hp', name: '80mm high-pressure ram', mass: 6.0, cost: 1400, sourcing: 'custom', swapMinutes: 45,
     bore: 80, stroke: 200, maxPressure: 60,
   },
+  hyd50: {
+    id: 'hyd50', name: '50mm hydraulic cylinder + pump (150 bar)', mass: 9.5, cost: 1800, sourcing: 'specialist', swapMinutes: 45,
+    bore: 50, stroke: 150, maxPressure: 150, hydraulic: true, pumpCurrent: 90,
+  },
+  hyd80: {
+    id: 'hyd80', name: '80mm hydraulic cylinder + big pump (250 bar)', mass: 24, cost: 5200, sourcing: 'custom', swapMinutes: 90,
+    bore: 80, stroke: 200, maxPressure: 250, hydraulic: true, pumpCurrent: 160,
+  },
 };
 
 export const VALVES: Record<string, ValveSpec> = {
@@ -175,6 +190,11 @@ export const VALVES: Record<string, ValveSpec> = {
   dump: {
     id: 'dump', name: 'High-flow dump valve', mass: 1.6, cost: 380, sourcing: 'specialist', swapMinutes: 20,
     timeConstant: 0.02,
+  },
+  spool: {
+    id: 'spool', name: 'Hydraulic spool valve', mass: 1.4, cost: 300, sourcing: 'specialist', swapMinutes: 20,
+    timeConstant: 0.12,
+    maxRate: 1.6,
   },
 };
 

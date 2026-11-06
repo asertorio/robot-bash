@@ -52,7 +52,7 @@ export const AXEMAN: RobotDesign = {
     {
       // Points up while the arm lies back; down when it lands.
       id: 'head', label: 'Axe head', parent: 'arm', position: [0, 0.02, -0.53], rotation: zero, joint: fixed, role: 'structure',
-      shape: { type: 'extrude', plane: 'side', depth: 0.03, outline: [[-0.06, 0], [0.06, 0], [0.015, 0.16], [-0.015, 0.16]] }, material: 'hardox',
+      shape: { type: 'extrude', plane: 'side', depth: 0.03, outline: [[-0.06, 0], [0.06, 0], [0.015, 0.16], [-0.015, 0.16]] }, material: 'hardox', edge: 'spike',
     },
     battery('nicd24', [0, -0.03, -0.15]),
     gas('co2_2kg', [0, -0.03, 0.1]),
@@ -99,7 +99,7 @@ export const JAWBREAKER: RobotDesign = {
       // raised, and closes over the lower jaw — biting beyond it would just
       // lever its own nose up.
       id: 'beak', label: 'Crusher beak', parent: 'body', position: [0, 0.13, 0.2], rotation: [-45, 0, 0], role: 'structure',
-      shape: { type: 'extrude', plane: 'side', depth: 0.08, outline: [[0, -0.02], [0.34, -0.02], [0.39, -0.15], [0.33, -0.15], [0.3, 0.02], [0, 0.03]] }, material: 'hardox',
+      shape: { type: 'extrude', plane: 'side', depth: 0.08, outline: [[0, -0.02], [0.34, -0.02], [0.39, -0.15], [0.33, -0.15], [0.3, 0.02], [0, 0.03]] }, material: 'hardox', edge: 'spike',
       joint: { type: 'hinge', axis: [1, 0, 0], limits: [-10, 60], actuator: button1({ ram: 'ram80hp', valve: 'std', pressure: 25, leverArm: 0.1 }) },
     },
     ...fourWheels(0.34, -0.025, 0.1, -0.2, 'pneu250', 'dm750', 9),
@@ -121,7 +121,7 @@ export const LANCER: RobotDesign = {
     {
       // A cone turned to point forward; the slider runs along it.
       id: 'lance', label: 'Lance', parent: 'body', position: [0, 0.03, 0.3], rotation: [90, 0, 0], role: 'structure',
-      shape: { type: 'cone', radius: 0.035, length: 0.34 }, material: 'hardox',
+      shape: { type: 'cone', radius: 0.035, length: 0.34 }, material: 'hardox', edge: 'spike',
       joint: { type: 'slider', axis: [0, 1, 0], limits: [0, 200], actuator: button1({ ram: 'ram63', valve: 'dump', pressure: 24, leverArm: 0 }) },
     },
     wheel('wheel-l', 'Left wheel', [0.33, 0, -0.08], 'pneu250', 'dm750', 7),

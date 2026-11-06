@@ -2,7 +2,7 @@ import { ARENA } from './arena';
 import type { ControlState } from './control';
 import type { Robot } from './robot';
 import type RAPIER from '@dimforge/rapier3d-compat';
-import { qaxis, qconj, qmul, qrotate, vadd, vscale, vsub, type V3 } from './vmath';
+import { qaxis, qconj, qmul, qrotate, vadd, vcross, vdot, vlen, vscale, vsub, type V3 } from './vmath';
 
 /**
  * Point-and-drive steering towards a world position, handling being upside
@@ -32,6 +32,8 @@ export class CpuDriver {
   private reverseFor = 0;
   private arms = new WeaponOperator();
   private dt = 0;
+  /** Which way to curve when backing out of a shoving match (alternates, so it comes round a different side). */
+  private flank = 1;
 
   update(me: Robot, foe: Robot | undefined, pitOpen: boolean, dt: number): ControlState {
     const out: ControlState = { left: 0, right: 0, weapon: false, weapon2: false };
@@ -60,16 +62,25 @@ export class CpuDriver {
     const speed = Math.hypot(v.x, v.z);
     if (this.reverseFor > 0) {
       this.reverseFor -= dt;
-      out.left = -0.8;
-      out.right = -0.5;
+      out.left = this.flank > 0 ? -0.9 : -0.35;
+      out.right = this.flank > 0 ? -0.35 : -0.9;
       return this.weapons(me, foe, out);
     }
     // Includes shoving stalemates: going nowhere, so try another angle.
     const spinning = Math.abs(me.chassis.angvel().y) > 0.4;
     if (speed < 0.15 && !spinning) this.stuckFor += dt; else this.stuckFor = Math.max(0, this.stuckFor - dt);
-    if (this.stuckFor > 1.8) {
+    if (this.stuckFor > 1.5) {
       this.stuckFor = 0;
-      this.reverseFor = 0.6 + Math.random() * 0.6;
+      this.reverseFor = 0.5 + Math.random() * 0.5;
+      this.flank = -this.flank;
+    }
+
+    // A thwackbot's weapon is turning: close in, then spin on the spot.
+    if (me.design.style === 'thwack' && dist < 1.5) {
+      out.left = 1;
+      out.right = -1;
+      if (inverted) [out.left, out.right] = [-out.right, -out.left];
+      return this.weapons(me, foe, out);
     }
 
     const turn = Math.max(-1, Math.min(1, -bearing * 1.6));
@@ -122,14 +133,16 @@ export class WeaponOperator {
       const flame = me.flames.some((f) => f.def.input.source === b);
       if (!kinds && !flame) continue;
       let press = false;
-      if (kinds?.has('spinner')) {
+      const chainToggle = me.chains.some((c) => c.def.input.source === b && c.def.input.mode === 'toggle');
+      if (kinds?.has('spinner') || chainToggle) {
         // Toggle switches: press once to switch on, then leave it.
-        const off = me.actuators.some((a) => a.def.input.source === b && a.def.input.mode === 'toggle' && !a.toggled && a.child.joint);
+        const off = me.actuators.some((a) => a.def.input.source === b && a.def.input.mode === 'toggle' && !a.toggled && a.child.joint)
+          || me.chains.some((c) => c.def.input.source === b && c.def.input.mode === 'toggle' && !c.toggled && !c.part.detached);
         press = off && !this.pressed.has(b);
         if (press) this.pressed.add(b); else this.pressed.delete(b);
-      } else if (kinds?.has('motor')) {
-        // A held motor (drum, saw, crusher screw): keep it going while anyone is near.
-        press = targets.some((t) => planarDistance(me, t) < LOOK_RANGE);
+      } else if (kinds?.has('motor') || (kinds?.has('chain') && kinds.size === 1)) {
+        // A held motor or chainsaw (drum, saw, crusher screw): keep it going while anyone is near.
+        press = targets.some((t) => planarDistance(me, t) < (kinds.has('chain') ? 1.5 : LOOK_RANGE));
       } else {
         const holding = (this.hold.get(b) ?? 0) - dt;
         const resting = (this.rest.get(b) ?? 0) - dt;
@@ -157,8 +170,10 @@ export class WeaponOperator {
     let t = me.flames.some((f) => f.def.input.source === b) ? 0.8 : 0.35;
     for (const a of me.actuators) {
       if (a.def.input.source !== b) continue;
-      if (a.def.type === 'pneumatic') t = Math.max(t, Number.isFinite(a.maxRate) ? 1.6 : 0.5);
-      if (a.def.type === 'servo') t = Math.max(t, 1.0);
+      // A hydraulic crusher holds on to get its point through.
+      if (a.def.type === 'pneumatic') t = Math.max(t, a.ram?.hydraulic ? 2.6 : Number.isFinite(a.maxRate) ? 1.6 : 0.5);
+      // Bring a saw arm down and keep it there while it cuts.
+      if (a.def.type === 'servo') t = Math.max(t, me.parts.some((p) => p.bodyKey === a.child.key && p.edge === 'saw') ? 2.5 : 1.0);
     }
     return t;
   }
@@ -176,7 +191,7 @@ export class WeaponOperator {
       const off = Math.hypot(to.x - dir.x * along, to.y - dir.y * along, to.z - dir.z * along);
       if (along > 0 && along < f.def.range + 0.2 && off < 0.35 + along * 0.35) return true;
     }
-    if (me.gasLeft <= 0 && me.actuators.every((a) => a.def.input.source !== b || a.def.type === 'pneumatic')) return false;
+    if (me.gasLeft <= 0 && me.actuators.every((a) => a.def.input.source !== b || (a.def.type === 'pneumatic' && !a.ram?.hydraulic))) return false;
     for (const a of me.actuators) {
       if (a.def.input.source !== b || !a.child.joint) continue;
       const pivot = a.child.body.translation();
@@ -192,10 +207,13 @@ export class WeaponOperator {
       }
       if (Math.abs(travel) < 1e-3) continue;
       const own = me.parts.filter((p) => p.bodyKey === a.child.key && !p.detached && p.kind === 'structure').flatMap((p) => me.collidersOf(p));
-      // A slow lifter only lifts what's already sitting on it; anything else
-      // it would just push away. Fast weapons hit whatever their stroke reaches.
+      // A slow weapon (lifter, hydraulic crusher) only works on what it's
+      // already pressing on in the direction it moves — under a lifter, under
+      // a crusher's beak; anything else it would just push away. Fast weapons
+      // hit whatever their stroke reaches.
       const slow = a.def.type === 'pneumatic' && Number.isFinite(a.maxRate);
-      for (const k of slow ? [0.08] : [0.08, 0.3, 0.55, 0.8, 1]) {
+      const sign = Math.sign(travel);
+      for (const k of [0.08, 0.3, 0.55, 0.8, 1]) {
         const d = travel * k;
         const turn = a.joint === 'hinge' ? qaxis(axis, d) : { x: 0, y: 0, z: 0, w: 1 };
         for (const c of own) {
@@ -204,8 +222,15 @@ export class WeaponOperator {
           const rot = qmul(turn, c.rotation());
           for (const fc of foeColliders) {
             const hit = fc.contactShape(shapeOf(c), pos, rot, HIT_MARGIN);
-            // A lifter wants them on top of it, not just touching its tip.
-            if (hit && hit.distance < HIT_MARGIN && (!slow || hit.normal2.y > 0.5)) return true;
+            if (!hit || hit.distance >= HIT_MARGIN) continue;
+            if (!slow) return true;
+            // Which way is our surface moving there, and is it pressing into them?
+            const motion = a.joint === 'hinge' ? vscale(vcross(axis, vsub(hit.point2, pivot)), sign) : vscale(axis, sign);
+            const len = vlen(motion);
+            if (len < 1e-6 || vdot(hit.normal2, motion) / len < 0.5) continue;
+            // Lifting: only what's on it already. Crushing down: anything the
+            // beak comes down on is trapped against the floor or the scoop.
+            if (k <= 0.08 || -motion.y / len > 0.5) return true;
           }
         }
       }

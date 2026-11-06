@@ -1,11 +1,11 @@
 import RAPIER from '@dimforge/rapier3d-compat';
-import { material } from '../data/materials';
+import { hardnessOf, material } from '../data/materials';
 import { BATTERIES, GEARBOX, MOTORS, RAMS, TANKS, VALVES, WHEELS, lookup, type MotorSpec, type RamSpec } from '../data/parts';
 import { actuatorMass, faceArea, partFrames, partMass, registerCatalog, resolveShape, root, shapeHalf, solidThickness, unit } from './assembly';
 import { convexPieces, hullMetrics, pieceMassProps, shapeVolume, type Piece } from './shapes';
 import type { ControlState } from './control';
-import { COMPONENT_TOUGHNESS, DAMAGE, HEAT, SHOCK, WHEEL_TOUGHNESS, damageFor, plateToughness, transmission, type Toughness } from './damage';
-import type { ActuatorDef, InputDef, PartDef, RobotDesign, Shape } from './design';
+import { COMPONENT_TOUGHNESS, CUT, DAMAGE, HEAT, SHOCK, WHEEL_TOUGHNESS, damageFor, plateToughness, transmission, type Toughness } from './damage';
+import type { ActuatorDef, ChainDef, EdgeKind, InputDef, PartDef, RobotDesign, Shape } from './design';
 import { DEBRIS_GROUPS, GHOST_GROUPS, robotGroups, wheelBodyGroups, wheelTyreGroups } from './groups';
 import { dcMotor } from './motor';
 import { electronicsMass, gasDensity } from './stats';
@@ -48,6 +48,12 @@ export interface Part {
   tyre?: RAPIER.Collider | null;
   /** Last condition band we announced, so commentary isn't spammy. */
   announced: number;
+  /** What it's made of (wheels: rubber; internals: aluminium casings), for edges and hardness. */
+  material: string;
+  /** Plate or section thickness, mm (what a spike has to get through). */
+  thickness: number;
+  /** How its edge cuts. */
+  edge: EdgeKind;
 }
 
 export interface RobotEvent {
@@ -111,6 +117,15 @@ export interface Rotor {
 }
 
 const AIR_DAMPING = 0.05;
+/**
+ * Robot-on-robot contact. Bare plate on plate is slippery, and robots bounce
+ * off each other a little, so evenly matched robots slide off and come round
+ * again instead of mashing together. Against the arena floor the floor's own
+ * rule (multiply) still wins, so traction is unchanged.
+ */
+const ROBOT_RESTITUTION = 0.12;
+/** A tyre's side wall against another robot: grippy, but not wheel-on-floor grippy. */
+const TYRE_SIDE_GRIP = 0.55;
 const GAIT_HZ = 1.4;
 
 export class Robot {
@@ -143,6 +158,10 @@ export class Robot {
   private velAt = 0;
   private shockPeak = 0;
   private springs: Array<{ child: BodyInfo; parent: BodyInfo; axis: V3; anchor: V3; joint: 'hinge' | 'slider'; stiffness: number; damping: number }> = [];
+  /** Chainsaws fitted, and whether each is running. */
+  readonly chains: Array<{ part: Part; def: ChainDef; on: boolean; toggled: boolean; wasPressed: boolean }> = [];
+  /** Multiplies all damage this robot takes (the Brutal damage setting). */
+  damageScale = 1;
   /** Flamethrowers fitted, and whether each is lit right now. */
   readonly flames: Array<{ part: Part; def: Extract<NonNullable<PartDef['component']>, { type: 'flamethrower' }>; dir: V3; fuel: number; on: boolean; toggled: boolean; wasPressed: boolean }> = [];
 
@@ -204,6 +223,9 @@ export class Robot {
       const part = this.addPart({
         id: p.id, label: p.label, kind: p.role, def: p, local: centre, bodyKey: info.key,
         internal: p.role === 'component',
+        material: p.role === 'wheel' ? 'rubber' : p.role === 'component' ? 'aluminium' : p.material ?? 'aluminium',
+        thickness: p.role === 'structure' ? p.wall ?? solidThickness(rs.shape) : 4,
+        edge: p.role === 'structure' ? p.edge ?? 'blunt' : 'blunt',
         toughness: p.role === 'wheel' ? WHEEL_TOUGHNESS : p.role === 'component' ? COMPONENT_TOUGHNESS
           : plateToughness(p.material ?? 'aluminium', p.wall ?? solidThickness(rs.shape), faceArea(rs.shape)),
         visual: { shape: rs.shape, pos: centre, rot },
@@ -215,7 +237,7 @@ export class Robot {
         const spec = lookup(WHEELS, p.wheel!, 'wheel');
         // Rapier's cylinder-on-box contact makes resting wheels creep, so the
         // floor sees a sphere of the same radius; other robots see the cylinder.
-        this.attachShape(part, rs.shape, centre, rot, partMass(p), info.body, wheelBodyGroups(index), spec.grip, 0.05);
+        this.attachShape(part, rs.shape, centre, rot, partMass(p), info.body, wheelBodyGroups(index), Math.min(spec.grip, TYRE_SIDE_GRIP), ROBOT_RESTITUTION);
         part.tyre = world.createCollider(
           RAPIER.ColliderDesc.ball(spec.radius).setTranslation(centre.x, centre.y, centre.z).setMass(0.01).setFriction(spec.grip).setRestitution(0.05)
             .setCollisionGroups(wheelTyreGroups(index))
@@ -237,7 +259,8 @@ export class Robot {
           this.gasCapacity += lookup(TANKS, p.component!.part, 'tank').capacity;
         }
       } else {
-        this.attachShape(part, rs.shape, centre, rot, partMass(p), info.body, this.groups, material(p.material ?? 'aluminium').friction, 0.1);
+        this.attachShape(part, rs.shape, centre, rot, partMass(p), info.body, this.groups, material(p.material ?? 'aluminium').friction, ROBOT_RESTITUTION);
+        if (p.chain && p.edge === 'saw') this.chains.push({ part, def: p.chain, on: false, toggled: false, wasPressed: false });
       }
     }
     this.gasLeft = this.gasCapacity;
@@ -269,8 +292,22 @@ export class Robot {
       }
     }
 
+    // Hard-metal parts of a spinning weapon are its teeth: they cut.
+    for (const a of this.actuators) {
+      if (a.def.type !== 'motor' || a.locomotion) continue;
+      for (const q of this.parts) {
+        if (q.bodyKey !== a.child.key || q.kind !== 'structure' || q.def?.edge) continue;
+        if (hardnessOf(material(q.material)) >= 200) q.edge = 'blade';
+      }
+    }
+    // Saws and spikes work with light, steady contact too: report it.
+    for (const q of this.parts) {
+      if (q.edge !== 'saw' && q.edge !== 'spike') continue;
+      for (const c of this.collidersOf(q)) c.setContactForceEventThreshold(CUT.EVENT_THRESHOLD);
+    }
+
     // Speed controllers, radio and wiring, in the chassis.
-    this.electronicsPart = this.addPart({ id: 'electronics', label: 'Speed controllers & radio', kind: 'electronics', local: { x: 0, y: 0, z: 0 }, bodyKey: rootPart.id, internal: true, toughness: COMPONENT_TOUGHNESS });
+    this.electronicsPart = this.addPart({ id: 'electronics', label: 'Speed controllers & radio', kind: 'electronics', local: { x: 0, y: 0, z: 0 }, bodyKey: rootPart.id, internal: true, toughness: COMPONENT_TOUGHNESS, material: 'aluminium', thickness: 2, edge: 'blunt' });
     this.electronicsPart.body = this.chassis;
     const em = electronicsMass(design);
     this.attach(this.electronicsPart, RAPIER.ColliderDesc.ball(Math.cbrt((3 * em) / (4 * Math.PI * 2500))).setMass(em), this.chassis, GHOST_GROUPS);
@@ -281,7 +318,7 @@ export class Robot {
     const what = def.type === 'pneumatic' ? 'ram' : def.type === 'servo' ? 'servo' : 'motor';
     const mass = actuatorMass(def);
     // The motor or ram sits on the parent body at the joint.
-    const part = this.addPart({ id: `${p.id}-act`, label: `${p.label} ${what}`, kind: 'actuator', local: anchor, bodyKey: parent.key, internal: true, toughness: COMPONENT_TOUGHNESS });
+    const part = this.addPart({ id: `${p.id}-act`, label: `${p.label} ${what}`, kind: 'actuator', local: anchor, bodyKey: parent.key, internal: true, toughness: COMPONENT_TOUGHNESS, material: 'mildSteel', thickness: 4, edge: 'blunt' });
     part.body = parent.body;
     this.attach(part, RAPIER.ColliderDesc.ball(Math.cbrt((3 * mass) / (4 * Math.PI * 3000))).setTranslation(anchor.x, anchor.y, anchor.z).setMass(mass), parent.body, GHOST_GROUPS);
     const act: Actuator = {
@@ -329,7 +366,8 @@ export class Robot {
       const { desc, offset } = pieceCollider(piece);
       const at = vadd(centre, qrotate(rot, offset));
       const m = Math.max(1e-4, (mass * vols[i]) / total);
-      desc.setTranslation(at.x, at.y, at.z).setRotation(rot).setFriction(friction).setRestitution(restitution);
+      desc.setTranslation(at.x, at.y, at.z).setRotation(rot).setFriction(friction).setRestitution(restitution)
+        .setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min);
       // Rapier's own mass properties go wrong for very flat hulls; use ours.
       const mp = pieceMassProps(piece);
       if (mp) {
@@ -398,8 +436,14 @@ export class Robot {
   }
 
   /** Which buttons do something, and what kind of thing. */
-  buttonUses(): Map<string, Set<'spinner' | 'pneumatic' | 'servo' | 'motor'>> {
-    const out = new Map<string, Set<'spinner' | 'pneumatic' | 'servo' | 'motor'>>();
+  buttonUses(): Map<string, Set<'spinner' | 'pneumatic' | 'servo' | 'motor' | 'chain'>> {
+    const out = new Map<string, Set<'spinner' | 'pneumatic' | 'servo' | 'motor' | 'chain'>>();
+    for (const ch of this.chains) {
+      const src = ch.def.input.source;
+      if (!src.startsWith('button') || ch.part.detached) continue;
+      if (!out.has(src)) out.set(src, new Set());
+      out.get(src)!.add('chain');
+    }
     for (const a of this.actuators) {
       if (!a.def.input.source.startsWith('button') || !a.child.joint) continue;
       const kind = a.def.type === 'motor' && a.def.input.mode === 'toggle' ? 'spinner' : a.def.type;
@@ -432,6 +476,11 @@ export class Robot {
         sp.child.body.applyImpulseAtPoint(imp, at, true);
         sp.parent.body.applyImpulseAtPoint(vscale(imp, -1), at, true);
       }
+    }
+    for (const ch of this.chains) {
+      const want = this.command(ch, c) > 0.5;
+      ch.on = want && this.powered && !ch.part.failed && !ch.part.detached;
+      if (ch.on) amps += 45;
     }
     for (const fl of this.flames) {
       const want = this.command(fl, c) > 0.5;
@@ -530,7 +579,10 @@ export class Robot {
 
     // Pneumatic: fire on press, hold while held, vent on release.
     const pressed = cmd > 0.5 && this.powered;
-    if (pressed && !a.firing && this.gasLeft > 0 && !this.tankParts.every((t) => t.failed)) {
+    if (a.ram!.hydraulic) {
+      // Hydraulic: the pump makes pressure for as long as there's power.
+      if (pressed && !a.firing) { a.firing = true; a.fireTime = 0; a.shotScale = 1; }
+    } else if (pressed && !a.firing && this.gasLeft > 0 && !this.tankParts.every((t) => t.failed)) {
       a.shotScale = Math.min(1, this.gasLeft / a.gasPerShot);
       this.gasLeft = Math.max(0, this.gasLeft - a.gasPerShot);
       a.firing = true;
@@ -561,6 +613,7 @@ export class Robot {
         a.parent.body.applyImpulseAtPoint(vscale(imp, -1), at, true);
       }
     }
+    if (a.ram!.hydraulic) return a.firing ? (a.ram!.pumpCurrent ?? 60) * Math.min(1, 0.3 + Math.abs(a.speed)) : 0;
     return a.firing ? 2 : 0;
   }
 
@@ -601,6 +654,8 @@ export class Robot {
    */
   absorb(part: Part, energy: number, point: V3, prior = 0): number {
     if (part.detached || energy <= 0) return 0;
+    energy *= this.damageScale;
+    prior *= this.damageScale;
     let loss = 0;
     const hurt = (q: Part, before: number, after: number) => {
       const c = q.condition;
@@ -629,6 +684,48 @@ export class Robot {
       if (act) hurt(act.part, prior * passOn * 0.5, total * passOn * 0.5);
     }
     return loss;
+  }
+
+  /**
+   * Steady wear at a contact point — a saw cutting, a spike piercing. Takes
+   * `loss` of condition straight off the part (no elastic threshold) and
+   * passes some on to the internals right behind it. Returns condition lost.
+   */
+  cut(part: Part, loss: number, point: V3): number {
+    if (part.detached || part.failed || loss <= 0) return 0;
+    loss *= this.damageScale;
+    let total = 0;
+    const take = (q: Part, l: number) => { const c = q.condition; q.condition = Math.max(0, c - l); total += c - q.condition; };
+    take(part, loss);
+    if (part.kind !== 'structure') return total;
+    // Once a cut is through (the plate's in a bad way), it gets into what's behind.
+    const through = 0.15 + 0.85 * (1 - Math.max(0, part.condition));
+    const body = this.bodies_.get(part.bodyKey);
+    const local = body ? this.toBodyLocal(point, body.body) : part.local;
+    for (const q of this.parts) {
+      if (!q.internal || q.failed || q.bodyKey !== part.bodyKey) continue;
+      const d = vlen(vsub(local, q.local));
+      if (d > DAMAGE.TRANSMIT_RADIUS * 0.8) continue;
+      take(q, loss * 0.35 * through * (1 - d / (DAMAGE.TRANSMIT_RADIUS * 0.8)));
+    }
+    return total;
+  }
+
+  /** Move the whole robot (everything still attached) by `d`, and stop it dead. */
+  shift(d: V3) {
+    for (const b of this.bodies_.values()) {
+      if (b.detached) continue;
+      const t = b.body.translation();
+      b.body.setTranslation({ x: t.x + d.x, y: t.y + d.y, z: t.z + d.z }, true);
+      b.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      b.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    }
+  }
+
+  /** Is this part's chainsaw running? */
+  chainRunning(part: Part): number {
+    const ch = this.chains.find((c) => c.part === part);
+    return ch?.on ? ch.def.speed : 0;
   }
 
   /**

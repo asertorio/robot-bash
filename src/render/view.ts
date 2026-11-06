@@ -33,6 +33,8 @@ export class MatchView {
   followIndex = 0;
   private orbit = { yaw: 0.6, pitch: 0.55, dist: 3.2 };
   private snapCamera = false;
+  /** Camera shake from big hits: 0..1, decays quickly. */
+  private shakeAmount = 0;
   private sparks: THREE.Points;
   private sparkData: Array<{ p: THREE.Vector3; v: THREE.Vector3; life: number }> = [];
   private sparkPositions = new Float32Array(600 * 3);
@@ -426,6 +428,7 @@ export class MatchView {
       this.floorFlipper.quaternion.set(fq.x, fq.y, fq.z, fq.w);
       this.syncFlames(m, dt);
       this.updateCamera(m, dt);
+      this.applyShake(dt);
       this.placeGizmo();
     }
     this.renderer.render(this.scene, this.camera);
@@ -527,6 +530,18 @@ export class MatchView {
     });
     this.flames.geometry.setDrawRange(0, this.flameData.length);
     this.flames.geometry.attributes.position.needsUpdate = true;
+  }
+
+  /** Shake the camera (0..1), e.g. for a big hit. */
+  shake(amount: number) {
+    this.shakeAmount = Math.min(1, Math.max(this.shakeAmount, amount));
+  }
+
+  private applyShake(dt: number) {
+    if (this.shakeAmount <= 0.001) return;
+    const k = this.shakeAmount * this.shakeAmount * 0.12;
+    this.camera.position.add(new THREE.Vector3((Math.random() - 0.5) * k, (Math.random() - 0.5) * k, (Math.random() - 0.5) * k));
+    this.shakeAmount *= Math.exp(-dt * 7);
   }
 
   /** TV-style camera: high and to one side, drifting to keep both robots in frame. */

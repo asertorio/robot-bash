@@ -34,6 +34,10 @@ export class Hud {
   private tags: HTMLDivElement[] = [];
   private reports: HTMLDivElement[] = [];
   private textClock = 0;
+  /** A shout across the middle of the screen ("HUGE HIT"), and until when (match time). */
+  private flashText = '';
+  private flashUntil = -1;
+  private finaleShown = false;
 
   constructor(private match: Match, controllers: string[]) {
     this.timer = h('div', { class: 'timer' }, '3:00');
@@ -62,6 +66,14 @@ export class Hud {
       this.big, this.feed, ...this.tags,
       this.help);
     this.applyReportMode();
+  }
+
+  /** A big hit just landed: shout about it. */
+  bigHit(energy: number) {
+    const kj = energy / 1000;
+    this.flashText = `${kj > 6 ? 'MASSIVE' : kj > 3 ? 'HUGE' : 'BIG'} HIT · ${kj.toFixed(1)} kJ`;
+    this.flashUntil = this.match.time + 1.2;
+    this.textClock = 0;
   }
 
   /** Tab: health diagrams → diagrams and the full report → nothing. */
@@ -108,7 +120,9 @@ export class Hud {
       const left = m.duration - m.time;
       this.timer.textContent = clock(left);
       this.timer.classList.toggle('low', left < 30);
-      this.big.textContent = m.time < 1.2 ? 'Activate!' : '';
+      if (m.finaleStarted && !this.finaleShown) { this.finaleShown = true; this.flashText = 'FINALE · PIT OPEN'; this.flashUntil = m.time + 2.5; }
+      this.big.textContent = m.time < 1.2 ? 'Activate!' : m.time < this.flashUntil ? this.flashText : '';
+      this.big.classList.toggle('flash', m.time >= 1.2 && m.time < this.flashUntil);
     }
     m.competitors.forEach((r, i) => {
       this.metas[i].innerHTML = this.instruments(r, m.eliminated[i]);
@@ -147,6 +161,7 @@ export class Hud {
       const gone = !rot.actuator.child.joint;
       bits.push(gone ? `<span class="bad">${rot.actuator.driven.label} gone</span>` : `${rot.actuator.driven.label} <b>${Math.round(rot.rpm).toLocaleString()} rpm</b>${rot.on ? '' : ' (off)'}`);
     }
+    for (const ch of r.chains) bits.push(ch.part.detached ? `<span class="bad">${ch.part.label} gone</span>` : `${ch.part.label} <b>${ch.on ? 'running' : 'off'}</b>`);
     return bits.join('<br>');
   }
 

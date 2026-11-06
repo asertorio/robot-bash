@@ -148,8 +148,15 @@ under a close camera, with `fire=1`, `damage=0.6`, `yaw`, `pitch`, `dist`.
 - A design-level `catalog` of custom motors, batteries, wheels, rams,
   valves, tanks and materials, registered by id when the design is built.
 
-What remains a limit is physics: parts are rigid (nothing bends, cuts or
-deforms), and a robot's own parts don't collide with each other.
+What remains a limit is physics: parts are rigid (nothing bends or
+deforms — cuts and punctures are modelled as damage, not geometry), and a
+robot's own parts don't collide with each other.
+
+**Edges.** Each structure part has an `edge`: `blunt`, `blade`, `spike` or
+`saw` (absent: hard-metal parts of a spinning weapon are blades, everything
+else blunt). A `saw` part can carry a `chain` (a chainsaw: the chain runs at
+`speed` m/s while its input is on). A design can set `style: 'thwack'` to
+tell the CPU its weapon is turning on the spot.
 
 v1 designs (a single shell, two-sided drive and one weapon) still load:
 `src/sim/legacy.ts` converts them. The starter and house robots are written
@@ -203,6 +210,11 @@ Whether a flip throws a 100 kg opponent over the wall depends on the pressure,
 the bore, the valve, the lever arm and the opponent's real mass and centre of
 gravity. Gas is finite: run out and the flipper is dead weight.
 
+**Hydraulics.** A ram marked `hydraulic` is a pump-driven cylinder: it uses
+no gas, draws `pumpCurrent` from the battery while it works, and is paired
+with the flow-limited `spool` valve, so it is slow and very strong — a
+crusher that can bite as often as it likes.
+
 ### Spinner
 
 A weapon motor spins up a disc or bar with real moment of inertia
@@ -224,6 +236,37 @@ E      ≈ ½ × (F_contact × dt) × v_closing     (robot vs robot: each side a
 E_y    = K_yield × σ_yield × t²               (plates resist ~ thickness²)
 damage = max(0, E − E_y) / (K_cap × toughness × t × sizeFactor)
 ```
+
+**Materials and edges.** Robot on robot, the impact isn't split evenly: each
+side's share is
+
+```
+share  = (1/√H_mine) / (1/√H_mine + 1/√H_theirs)           (softer takes more)
+       × EDGE[their edge] × (H_theirs / H_mine)^k[edge]     (clamped 0.25–7)
+```
+
+with Brinell hardness H (aluminium 95, mild steel 130, titanium 330, hardened
+steel 500, HDPE 6…). Blunt plate on blunt plate of the same metal is 50/50 as
+before; a hardened tooth on aluminium bites about three times deeper than on
+hardened steel, and an aluminium tooth hardly marks hardened steel.
+
+**Cutting.** Saws cut from sliding contact, not impacts: per step,
+
+```
+loss = CUT.K × F_normal × (v_slide + v_chain) × (H_saw / H_plate)^0.8 × dt / capacity
+```
+
+straight off the part's condition (teeth remove metal however light the
+touch), with a share passed to the internals behind it as the cut gets
+through. A chainsaw held on 6 mm mild steel is through it in a few seconds.
+
+**Piercing.** Spikes and crusher beaks pierce under steady force. A plate
+resists a point up to `F_p = 2.5 × σ_yield(MPa) × t(mm)` N (≈4 kN for 6 mm
+aluminium, 19 kN for 6 mm hardened steel); beyond that it loses
+`0.35 × (F/F_p − 1) × √(H_spike/H_plate)` of its condition per second (overload
+capped at 4×). So a crusher's damage comes from how hard it squeezes and for
+how long, not from how fast it closes. Saw and spike colliders report contacts
+from 40 N, so light, steady contact registers.
 
 A single hit often spans several physics steps, so energy is summed per
 *impact episode* (same pair of colliders, gaps under 20 ms, at most 250 ms)
@@ -265,7 +308,7 @@ flipper plates that can't reach the floor, and very high ground clearance.
 
 ## Rules (per fight)
 
-- **Fight length:** 3 minutes (configurable).
+- **Fight length:** 3 minutes (1:30 / 3:00 / 5:00 in Settings).
 - **Immobilisation:** if a robot hasn't moved under its own power for 4 s, the
   referee starts a 10-second count. Being shoved around while helpless doesn't
   count as moving, and nothing that happens while a house robot is touching
@@ -276,6 +319,23 @@ flipper plates that can't reach the floor, and very high ground clearance.
 - **Out of the arena:** thrown over the wall → out.
 - **Judges' decision** if both survive: aggression, control, damage and style,
   scored from what actually happened in the sim.
+- **Referee breaks:** two competitors in contact, both driving, neither moving
+  (under 0.2 m/s, not turning), both on the ground, for 5 s: the referee pulls
+  them apart to arm's length and stops them dead (`breaks`, on by default).
+- **Finale** (option): with 30 s left the pit opens and the house robots
+  treat every competitor as fair game.
+- **Damage scale** (option): Brutal doubles all damage.
+
+### Why robots slide off each other
+
+Evenly matched robots used to get caught together and mash. Robot colliders
+now combine friction with the *min* rule (bare plate on plate is slippery; a
+tyre's side wall against a robot is capped at 0.55), and robots have a little
+restitution (0.12) against each other only — the arena's colliders use the
+*min* restitution rule, so landings aren't bouncy, and the floor's *multiply*
+friction rule still wins against robots, so traction is unchanged. With the
+CPU backing out to alternate sides when it's stuck, a 45 s CPU fight between a
+wedge and a flipper went from 21 s locked together to under 1 s.
 
 ## Derived stats (shown in the builder)
 
@@ -287,11 +347,16 @@ of a full rebuild, and pit time per part.
 
 ## CPU drivers
 
-The CPU chases, lines up and backs off when stuck, through the same controls
-a human has. Weapons are worked generically by `WeaponOperator`
+The CPU chases, lines up and backs off when stuck (curving away to alternate
+sides, so it comes round a different way), through the same controls a human
+has. Chainsaws are switched on and left running; thwackbots close in and spin
+on the spot. Weapons are worked generically by `WeaponOperator`
 (`src/sim/ai.ts`): spinners and drums are switched on and left on; anything
 on a stroke (flippers, axes, crushers, rams, servos) is fired only when
-sweeping its driven part through the stroke would actually reach the target,
+sweeping its driven part through the stroke would actually reach the target
+(for slow lifters and hydraulic crushers, only where that surface is moving
+into them: a lifter what's already on it, a crusher whatever it comes down
+on),
 and the button is held for the whole stroke (0.5 s for a dump-valve flipper,
 1.6 s for a slow lifter). Slow lifters only fire with the target resting on
 top of them. Flamethrowers fire when the target is in the cone. House robots
@@ -321,6 +386,9 @@ use the same operator.
 
 ## Physics notes
 
+- **Invertible / inboard wheels:** a robot's own parts don't collide, so
+  wheels can sit inside the body shell. Make the shell shallower than the
+  tyres and they stand proud top and bottom (Brickhouse).
 - Fixed 480 Hz step, 8 solver iterations, CCD on chassis, wheels and weapons.
   About 2 ms of CPU per rendered frame for a two-robot fight.
 - Wheels are real bodies on revolute joints. Rapier's cylinder-on-box contact
@@ -347,6 +415,10 @@ use the same operator.
    triggered by a robot parking on it; a cycling flame pit whose heat damages
    parts by type and material (`HEAT` in `damage.ts`); flow-limited lifter
    valves. House robots never count towards the result or the judges.
+   An **overpowered** set (Maelstrom, Pile Driver, Warden, Inferno) uses
+   house-only 48 V parts: a 1.3 m full-body spinner, a 125 kN hydraulic spike,
+   a hydraulic clamp-lifter and a flame-throwing 60-bar flipper. Classic,
+   overpowered or mixed is chosen on the select screen or in Settings.
    *Later:* wall spikes/grinders, house-robot weapons beyond lifters and
    spinners (crusher, flame thrower), and the pit being usable by house robots
    to finish victims.

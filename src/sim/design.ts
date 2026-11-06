@@ -112,6 +112,26 @@ export type ComponentDef =
   /** Shoots flame along the part's +Z while its input is on. Burns fuel (kg). */
   | { type: 'flamethrower'; input: InputDef; range: number; fuel: number };
 
+/**
+ * What a part's working edge does to whatever it hits.
+ * - 'blunt': plate, wedges, bodywork. Dents things; harder dents softer.
+ * - 'blade': a cutting edge or spinner tooth. Hits bite deeper, and far deeper
+ *   into anything softer than it.
+ * - 'spike': a point (axe heads, lances, crusher beaks). Hits punch through,
+ *   and it pierces under steady force once it's pushing hard enough.
+ * - 'saw': teeth that cut as they slide (saw discs, chainsaws): damage comes
+ *   from sliding speed and how hard it's pressed in, not from impacts.
+ * Absent: hard-metal parts of spinning weapons count as blades, everything
+ * else is blunt.
+ */
+export type EdgeKind = 'blunt' | 'blade' | 'spike' | 'saw';
+
+/** A chainsaw: the chain runs round the part at `speed` (m/s) while its input is on. */
+export interface ChainDef {
+  input: InputDef;
+  speed: number;
+}
+
 export interface PartDef {
   id: string;
   label: string;
@@ -135,6 +155,10 @@ export interface PartDef {
   component?: ComponentDef;
   /** Paint (CSS hex). Defaults to the robot colour for structure. */
   colour?: string;
+  /** Structure: how its edge cuts (see EdgeKind). */
+  edge?: EdgeKind;
+  /** Structure with a 'saw' edge: a driven chain running round it. */
+  chain?: ChainDef;
 }
 
 /** Builder-defined catalogue parts, referenced by id like any other. */
@@ -157,4 +181,9 @@ export interface RobotDesign {
   parts: PartDef[];
   /** Your own motors, batteries, materials… */
   catalog?: CustomCatalog;
+  /**
+   * How the CPU should drive it, for robots whose weapon is the way they move:
+   * 'thwack' spins on the spot to swing its tail once it's close.
+   */
+  style?: 'thwack';
 }
