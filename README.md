@@ -35,13 +35,16 @@ Everything runs in the browser; there's no server.
 | Macro ("fire & back off") | `C` | `M` |
 | Gamepad | Pad 1: left stick, A/RT, B/LT | Pad 2 |
 
-`Esc` pauses. `Tab` cycles the damage display: a small plan view of each
+`Esc`, the on-screen Pause button or a pad's Start pauses. Menus work with
+the keyboard (`Tab`, `Enter`, `Space`) or a gamepad (D-pad to move, A to
+pick, B to go back, Start to fight). `Tab` in a fight cycles the damage display: a small plan view of each
 robot with every part coloured by health, that plus the full damage report,
 or nothing. Each player's panel also shows battery, gas and fuel gauges.
 
 Drive keys ramp up to full power over a quarter of a second, so a quick tap is
 a small nudge, and the speed controllers brake when you let go. Everything can
-be changed under **Controls**: rebind any key, button or stick, switch to tank
+be changed under **Controls**: rebind any key, button or stick (it warns you
+if one key ends up doing two things), switch to tank
 mixing (one control per side, like a two-stick transmitter), adjust steering
 and the key ramp, and write macros such as `weapon 150, back+left 300`.
 
@@ -53,7 +56,8 @@ and the key ramp, and write macros such as `weapon 150, back+left 300`.
 - **Pit them or throw them out.** Drive over the red button to open the pit,
   or flip them over the wall.
 - **Or win on points.** If both survive 3 minutes, the judges score
-  aggression, control, damage and style from what actually happened.
+  aggression, control, damage and style from what actually happened. A dead
+  heat goes to damage, then aggression, and failing that it's a draw.
 
 ## The arena
 

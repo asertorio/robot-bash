@@ -162,3 +162,29 @@ describe('CPU weapons', () => {
     m.free();
   });
 });
+
+describe('after the fight, and without a radio', () => {
+  test('a robot whose radio is dead can no longer fire its weapon', () => {
+    const m = new Match([FLIPSIDE], { skipCountdown: true, sandbox: true });
+    const r = m.robots[0];
+    const radio = r.parts.find((p) => p.kind === 'electronics')!;
+    radio.condition = 0;
+    radio.failed = true;
+    run(m, 0.6, () => [{ ...N, weapon: true }]);
+    expect(r.gasLeft).toBe(r.gasCapacity);
+    m.free();
+  });
+
+  test('once the fight is decided, nobody else is put out and the controls go dead', () => {
+    const m = new Match([WEDGEHOG, WEDGEHOG], { skipCountdown: true, duration: 1, spawns: spawnAt([0, 3, 0], [0, -3, 0]) });
+    run(m, 1.2);
+    expect(m.phase).toBe('over');
+    const end = m.endTime;
+    // Player 1 now drives flat out at the wall and beyond.
+    run(m, 3, () => [drive(1), N]);
+    expect(m.eliminated).toEqual([null, null]);
+    expect(Math.abs(m.robots[0].chassis.linvel().z)).toBeLessThan(0.2);
+    expect(m.endTime).toBe(end);
+    m.free();
+  });
+});
