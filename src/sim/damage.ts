@@ -59,20 +59,42 @@ export const SHOCK = {
 };
 
 /**
- * Edges and hardness. Robot on robot, the softer side soaks up more of an
- * impact, and a sharp edge concentrates it: the defender's share is
- * multiplied by EDGE[kind] × (H_attacker / H_defender)^HARDNESS_EXP, clamped.
- * So a hardened tooth (500 HB) on aluminium (95 HB) bites about three times as
- * deep as it would into hardened steel, and an aluminium tooth barely marks
- * hardened steel at all.
+ * Edges and hardness. Robot on robot, each side of an impact used to take
+ * half; now the defender's share is
+ *
+ *   share = ½ × EDGE.factor[attacker's edge] × (H_attacker / H_defender)^EDGE.HARDNESS_EXP[edge]
+ *
+ * clamped to ½ × [MIN, MAX]. Hardness only counts plate against plate: tyres
+ * and internals take the plain ½ × edge factor, because their toughness is
+ * calibrated that way (rubber is far softer than steel but tough, and a
+ * hardness ratio of 250 would make every touch take a wheel off).
+ *
+ * Resulting multipliers on the old even split: hardened tooth on aluminium
+ * ×2.1, on mild steel ×1.9, on hardened steel ×1.2; aluminium tooth on
+ * hardened steel ×0.7; hardened-steel wedge on aluminium ×1.3; a blade on a
+ * tyre ×1.2; same-metal blunt plate ×1 (unchanged).
  */
 export const EDGE = {
-  /** Impact multiplier per edge kind, at equal hardness. */
-  factor: { blunt: 1, blade: 1.6, spike: 2.2, saw: 1.3 } as Record<EdgeKind, number>,
-  HARDNESS_EXP: { blunt: 0.25, blade: 0.65, spike: 0.65, saw: 0.8 } as Record<EdgeKind, number>,
-  MIN: 0.25,
-  MAX: 7,
+  factor: { blunt: 1, blade: 1.2, spike: 1.4, saw: 1 } as Record<EdgeKind, number>,
+  HARDNESS_EXP: { blunt: 0.15, blade: 0.35, spike: 0.35, saw: 0.35 } as Record<EdgeKind, number>,
+  MIN: 0.3,
+  MAX: 2.5,
 };
+
+/** What `hitShare` needs to know about each side of a contact. */
+export interface HitSide {
+  kind: string;
+  material: string;
+  edge: EdgeKind;
+}
+
+/** Share of a robot-on-robot impact's energy taken by `defender` when struck by `attacker` (½ for equal blunt plate). */
+export function hitShare(attacker: HitSide, defender: HitSide): number {
+  const plates = attacker.kind === 'structure' && defender.kind === 'structure';
+  const r = plates ? hardnessOf(material(attacker.material)) / hardnessOf(material(defender.material)) : 1;
+  const k = EDGE.factor[attacker.edge] * r ** EDGE.HARDNESS_EXP[attacker.edge];
+  return 0.5 * Math.max(EDGE.MIN, Math.min(EDGE.MAX, k));
+}
 
 /**
  * Saws and chainsaws cut as they slide: cutting power = K × normal force ×

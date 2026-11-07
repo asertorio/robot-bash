@@ -119,12 +119,13 @@ export interface Rotor {
 const AIR_DAMPING = 0.05;
 const NEUTRAL_CONTROL: ControlState = { left: 0, right: 0, weapon: false, weapon2: false };
 /**
- * Robot-on-robot contact. Bare plate on plate is slippery, and robots bounce
- * off each other a little, so evenly matched robots slide off and come round
- * again instead of mashing together. Against the arena floor the floor's own
- * rule (multiply) still wins, so traction is unchanged.
+ * Robot-on-robot contact. Bare plate on plate is slippery, so evenly matched
+ * robots slide off each other and come round again instead of mashing
+ * together. Against the arena floor the floor's own rule (multiply) still
+ * wins, so traction is unchanged. Hardly any bounce: 0.12 made hit robots
+ * skate further and, oddly, mash more (CPU fights stuck 22 s → 16 s at 0.05).
  */
-const ROBOT_RESTITUTION = 0.12;
+const ROBOT_RESTITUTION = 0.05;
 /** A tyre's side wall against another robot: grippy, but not wheel-on-floor grippy. */
 const TYRE_SIDE_GRIP = 0.55;
 const GAIT_HZ = 1.4;
@@ -161,7 +162,7 @@ export class Robot {
   private springs: Array<{ child: BodyInfo; parent: BodyInfo; axis: V3; anchor: V3; joint: 'hinge' | 'slider'; stiffness: number; damping: number }> = [];
   /** Chainsaws fitted, and whether each is running. */
   readonly chains: Array<{ part: Part; def: ChainDef; on: boolean; toggled: boolean; wasPressed: boolean }> = [];
-  /** Multiplies all damage this robot takes (the Brutal damage setting). */
+  /** Multiplies all damage this robot takes — impacts, cuts, shock and heat (the Brutal damage setting). */
   damageScale = 1;
   /** Flamethrowers fitted, and whether each is lit right now. */
   readonly flames: Array<{ part: Part; def: Extract<NonNullable<PartDef['component']>, { type: 'flamethrower' }>; dir: V3; fuel: number; on: boolean; toggled: boolean; wasPressed: boolean }> = [];
@@ -750,7 +751,7 @@ export class Robot {
 
   /** Internals rattled by a jolt of `dv` m/s. Returns the condition lost. */
   shock(dv: number): number {
-    const k = SHOCK.K * (dv - SHOCK.FREE) ** 2;
+    const k = SHOCK.K * (dv - SHOCK.FREE) ** 2 * this.damageScale;
     if (k <= 0) return 0;
     let loss = 0;
     for (const q of this.parts) {
@@ -773,6 +774,7 @@ export class Robot {
     else if (p.kind === 'component') rate = p.def?.component?.type === 'battery' ? HEAT.battery : HEAT.gas;
     else rate = (HEAT as unknown as Record<string, number>)[p.kind] ?? 0.015;
     if (p.internal && !p.exposed) rate *= HEAT.shielded;
+    rate *= this.damageScale;
     p.condition = Math.max(0, p.condition - rate * dt);
   }
 

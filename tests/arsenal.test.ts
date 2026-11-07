@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'vitest';
 import { ARSENAL, BRICKHOUSE, LUMBERJACK, TAILSPIN, VICEGRIP } from '../src/data/arsenal';
 import { MAELSTROM, MONSTER_HOUSE } from '../src/data/house';
+import { SAWTOOTH } from '../src/data/roster';
 import { CRASH_TEST_DUMMY, WEDGEHOG } from '../src/data/templates';
 import { CpuDriver, WeaponOperator } from '../src/sim/ai';
 import { cloneDesign } from '../src/sim/build';
-import { cutRatio, edgeFactor, impactShare, pierceForce } from '../src/sim/damage';
+import { cutRatio, hitShare, pierceForce } from '../src/sim/damage';
 import type { RobotDesign } from '../src/sim/design';
 import { Match } from '../src/sim/match';
 import { isLegal, scrutineer } from '../src/sim/rules';
@@ -24,12 +25,40 @@ const body = (m: Match, i: number) => m.robots[i].parts.find((p) => p.id === 'bo
 
 describe('materials and edges', () => {
   test('a hard edge bites deeper into soft plate, and hardly marks hard plate', () => {
-    expect(edgeFactor('blade', 'hardox', 'aluminium')).toBeGreaterThan(3 * edgeFactor('blade', 'hardox', 'hardox') * 0.9);
-    expect(edgeFactor('blade', 'aluminium', 'hardox')).toBeLessThan(edgeFactor('blunt', 'aluminium', 'aluminium'));
-    expect(edgeFactor('spike', 'hardox', 'mildSteel')).toBeGreaterThan(edgeFactor('blade', 'hardox', 'mildSteel'));
-    // Equal blunt plates share an impact evenly; softer takes more.
-    expect(impactShare('aluminium', 'aluminium')).toBeCloseTo(0.5);
-    expect(impactShare('aluminium', 'hardox')).toBeGreaterThan(0.6);
+    const plate = (material: string, edge: 'blunt' | 'blade' | 'spike' = 'blunt') => ({ kind: 'structure', material, edge });
+    const tooth = plate('hardox', 'blade');
+    expect(hitShare(plate('aluminium'), plate('aluminium'))).toBeCloseTo(0.5);
+    expect(hitShare(tooth, plate('aluminium'))).toBeGreaterThan(1.5 * hitShare(tooth, plate('hardox')));
+    expect(hitShare(plate('aluminium', 'blade'), plate('hardox'))).toBeLessThan(0.5);
+    expect(hitShare(plate('hardox', 'spike'), plate('mildSteel'))).toBeGreaterThan(hitShare(tooth, plate('mildSteel')));
+    // Bounded: no hit is more than 2.5× the old even split.
+    expect(hitShare(plate('hardox', 'spike'), plate('hdpe'))).toBeLessThanOrEqual(1.25);
+  });
+
+  test("tyres don't count as soft plate: a hardened tooth hits them only a little harder than an even split", () => {
+    const wheel = { kind: 'wheel', material: 'rubber', edge: 'blunt' as const };
+    expect(hitShare({ kind: 'structure', material: 'hardox', edge: 'blade' }, wheel)).toBeLessThan(0.65);
+    expect(hitShare({ kind: 'structure', material: 'hardox', edge: 'blunt' }, wheel)).toBeCloseTo(0.5);
+  });
+
+  test("a spinner hit doesn't take the wheels off the robot it hits", () => {
+    // A tyre used to count as soft rubber against hardened steel: one hit took a wheel from 1.00 to 0.55.
+    const m = new Match([SAWTOOTH, CRASH_TEST_DUMMY], { skipCountdown: true, sandbox: true, spawns: spawnAt([0, -3, 0], [0, 1.2, Math.PI / 2]) });
+    run(m, 0.05, () => [{ ...N, weapon: true }, N]);
+    run(m, 4);
+    run(m, 3, () => [drive(1), N]);
+    const wheels = m.robots[1].parts.filter((p) => p.kind === 'wheel');
+    expect(Math.min(...wheels.map((p) => p.condition))).toBeGreaterThan(0.9);
+    expect(body(m, 1)).toBeLessThan(0.97);
+    m.free();
+  });
+
+  test('a spike resting on a tyre does not puncture it', () => {
+    const tail = new Match([VICEGRIP, CRASH_TEST_DUMMY], { skipCountdown: true, sandbox: true, spawns: [{ pos: { x: 0, y: 0.01, z: -0.7 }, yaw: 0 }, { pos: { x: 0.36, y: 0.01, z: -0.05 }, yaw: Math.PI / 2 }] });
+    run(tail, 0.5);
+    run(tail, 3, () => [{ ...N, weapon: true }, N]);
+    expect(Math.min(...tail.robots[1].parts.filter((p) => p.kind === 'wheel').map((p) => p.condition))).toBeGreaterThan(0.9);
+    tail.free();
   });
 
   test('saws cut soft materials far faster than hardened steel', () => {

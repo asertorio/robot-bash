@@ -237,18 +237,22 @@ E_y    = K_yield × σ_yield × t²               (plates resist ~ thickness²)
 damage = max(0, E − E_y) / (K_cap × toughness × t × sizeFactor)
 ```
 
-**Materials and edges.** Robot on robot, the impact isn't split evenly: each
-side's share is
+**Materials and edges.** Robot on robot, each side used to take half of an
+impact. Now the defender's share is
 
 ```
-share  = (1/√H_mine) / (1/√H_mine + 1/√H_theirs)           (softer takes more)
-       × EDGE[their edge] × (H_theirs / H_mine)^k[edge]     (clamped 0.25–7)
+share = ½ × EDGE.factor[attacker's edge] × (H_attacker / H_defender)^k[edge]   (clamped ½ × 0.3 … ½ × 2.5)
 ```
 
 with Brinell hardness H (aluminium 95, mild steel 130, titanium 330, hardened
-steel 500, HDPE 6…). Blunt plate on blunt plate of the same metal is 50/50 as
-before; a hardened tooth on aluminium bites about three times deeper than on
-hardened steel, and an aluminium tooth hardly marks hardened steel.
+steel 500, HDPE 6…). Hardness only counts plate against plate: tyres and
+internals take the plain ½ × edge factor, since their toughness is calibrated
+for an even split (rubber is far softer than steel but tough — counting its
+hardness once made a single spinner hit take a wheel from 1.00 to 0.55).
+Against the old even split: a hardened tooth on aluminium ×2.1, on mild steel
+×1.9, on hardened steel ×1.2; an aluminium tooth on hardened steel ×0.7; a
+hardened wedge on aluminium ×1.3; a blade on a tyre ×1.2; same-metal blunt
+plate ×1.
 
 **Cutting.** Saws cut from sliding contact, not impacts: per step,
 
@@ -257,14 +261,15 @@ loss = CUT.K × F_normal × (v_slide + v_chain) × (H_saw / H_plate)^0.8 × dt /
 ```
 
 straight off the part's condition (teeth remove metal however light the
-touch), with a share passed to the internals behind it as the cut gets
+touch; tyres and internals get no hardness bonus), with a share passed to the internals behind it as the cut gets
 through. A chainsaw held on 6 mm mild steel is through it in a few seconds.
 
 **Piercing.** Spikes and crusher beaks pierce under steady force. A plate
 resists a point up to `F_p = 2.5 × σ_yield(MPa) × t(mm)` N (≈4 kN for 6 mm
 aluminium, 19 kN for 6 mm hardened steel); beyond that it loses
 `0.35 × (F/F_p − 1) × √(H_spike/H_plate)` of its condition per second (overload
-capped at 4×). So a crusher's damage comes from how hard it squeezes and for
+capped at 4×). Only plate is pierced: a tyre deforms round a point, and
+internals are reached through the plate in front. So a crusher's damage comes from how hard it squeezes and for
 how long, not from how fast it closes. Saw and spike colliders report contacts
 from 40 N, so light, steady contact registers.
 
@@ -324,15 +329,17 @@ flipper plates that can't reach the floor, and very high ground clearance.
   them apart to arm's length and stops them dead (`breaks`, on by default).
 - **Finale** (option): with 30 s left the pit opens and the house robots
   treat every competitor as fair game.
-- **Damage scale** (option): Brutal doubles all damage.
+- **Damage scale** (option): Brutal doubles all damage — impacts, cuts,
+  shock and heat.
 
 ### Why robots slide off each other
 
 Evenly matched robots used to get caught together and mash. Robot colliders
 now combine friction with the *min* rule (bare plate on plate is slippery; a
-tyre's side wall against a robot is capped at 0.55), and robots have a little
-restitution (0.12) against each other only — the arena's colliders use the
-*min* restitution rule, so landings aren't bouncy, and the floor's *multiply*
+tyre's side wall against a robot is capped at 0.55), and robots barely
+bounce off each other (restitution 0.05; 0.12 made hit robots skate further
+and mash more) — the arena's colliders use the *min* restitution rule, so
+landings aren't bouncy, and the floor's *multiply*
 friction rule still wins against robots, so traction is unchanged. With the
 CPU backing out to alternate sides when it's stuck, a 45 s CPU fight between a
 wedge and a flipper went from 21 s locked together to under 1 s.
