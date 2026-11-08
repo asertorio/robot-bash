@@ -403,7 +403,7 @@ class App {
     mount(this.ui, controlsScreen(this.profiles, this.input, (p) => {
       saveProfiles(p);
       this.input.setProfiles(p);
-    }, () => this.mainMenu()));
+    }, () => this.mainMenu(), { value: this.settings.stick, set: (v) => { this.settings.stick = v; saveSettings(this.settings); } }));
   }
 
   private howToScreen() {

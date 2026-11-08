@@ -437,7 +437,7 @@ use the same operator.
   robot turns to face that way (relative to the camera) and drives there —
   turn ∝ bearing error (full lock from ~35° off), throttle × cos(error), so a
   robot facing away pivots first; upside down the drive is reversed for you.
-  Settings → Touch stick switches to the classic RC mix (up = the robot's
+  Settings → Touch stick (also on the Controls screen) switches to the classic RC mix (up = the robot's
   forward, sideways steers). Robot-relative steering from a fixed TV camera
   is hard on a phone, which is why point to drive is the default. A button per
   weapon button the robot actually uses (bottom right, labelled Fire, Spin,
