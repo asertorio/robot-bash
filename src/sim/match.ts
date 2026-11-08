@@ -6,7 +6,7 @@ import type { RobotDesign } from './design';
 import { HOUSE_CORNERS, HouseDriver, zoneCentre } from './house';
 import { CUT, PIERCE, cutRatio, hitShare, pierceForce } from './damage';
 import { Robot, type Part } from './robot';
-import { vadd, vcross, vdot, vlen, vscale, vsub, type V3 } from './vmath';
+import { qrotate, vadd, vcross, vdot, vlen, vscale, vsub, type V3 } from './vmath';
 
 export const STEP = 1 / 480;
 const MAX_STEPS_PER_FRAME = 40;
@@ -16,6 +16,12 @@ const COUNT_GRACE = 4;
 const COUNT_OUT = 10;
 /** Seconds of driving under its own power a robot needs to stop a count once it's started. */
 const PROVE_MOBILE = 0.4;
+/**
+ * With a house robot touching you, what counts as driving yourself: speed
+ * along your heading the way the throttle says (m/s), or yaw the way you're
+ * steering (rad/s). Walking pace and a slow pivot — clearly deliberate.
+ */
+const SELF_DRIVE = { speed: 0.25, yaw: 0.8 };
 /** Seconds two robots can be locked together going nowhere before the referee breaks them up. */
 const STALEMATE = 5;
 /** The last this many seconds of a fight are the finale (when that's switched on). */
@@ -492,16 +498,19 @@ export class Match {
       if (this.phase !== 'fight') return;
 
       // Moving under its own power resets the count; being shoved around
-      // doesn't. Turning on the spot or shoving an opponent counts as control,
-      // but anything a house robot does to you is not your own doing.
+      // doesn't. Turning on the spot or shoving an opponent counts as control.
+      // With a house robot on you, only moving the way you're driving counts:
+      // they're sent after anyone on a count, and a robot genuinely escaping
+      // with one on its tail is mobile — the referee can see that.
       const c = this.controls[i] ?? NEUTRAL;
       const v = r.chassis.linvel();
       const speed = Math.hypot(v.x, v.z);
       const trying = Math.abs(c.left) + Math.abs(c.right) > 0.2;
       const contact = this.contacts(i);
       if (contact.touching) this.touched(r, contact.touching);
-      const active = speed > 0.12 || Math.abs(r.chassis.angvel().y) > 0.6 || contact.opponent;
-      const selfMoving = trying && active && !contact.house && r.tractionWheels() > 0;
+      const active = contact.house ? drivingItself(r, c)
+        : speed > 0.12 || Math.abs(r.chassis.angvel().y) > 0.6 || contact.opponent;
+      const selfMoving = trying && active && r.tractionWheels() > 0;
       // Once the count has started, a robot has to show it really can move —
       // a moment of drift after a house robot lets go doesn't stop the count.
       this.movingFor[i] = selfMoving ? this.movingFor[i] + dt : 0;
@@ -702,4 +711,22 @@ function phrase(name: string, text: string): string {
   if (text.startsWith("'s")) return `${name}${text}`;
   if (text.startsWith('— ')) return `${name}: ${text.slice(2)}`;
   return `${name} ${text}`;
+}
+
+/**
+ * Is the robot moving the way its controls are driving it (not just moving)?
+ * Forward speed along its own heading in the direction of the throttle, or
+ * yaw the way it's steering. A shove from a house robot sends you somewhere
+ * else, so it doesn't pass. Upside down the wheels touch the floor on the
+ * other side of their axles, so the drive runs backwards along the body.
+ */
+export function drivingItself(r: Robot, c: ControlState): boolean {
+  const throttle = (c.left + c.right) / 2, turn = (c.left - c.right) / 2;
+  const v = r.chassis.linvel();
+  const fwd = qrotate(r.rotation, { x: 0, y: 0, z: 1 });
+  const up = r.uprightness < 0 ? -1 : 1;
+  const along = (v.x * fwd.x + v.z * fwd.z) * up * Math.sign(throttle);
+  // Left side faster turns right: clockwise from above, negative yaw.
+  const yaw = -r.chassis.angvel().y * Math.sign(turn);
+  return (Math.abs(throttle) > 0.1 && along > SELF_DRIVE.speed) || (Math.abs(turn) > 0.1 && yaw > SELF_DRIVE.yaw);
 }

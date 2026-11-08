@@ -94,6 +94,9 @@ class App {
     this.touch.show(player !== null);
     this.input.touch = player !== null ? this.touch.state : null;
     this.input.touchPlayer = player ?? 0;
+    this.input.touchPose = robot && this.settings.stick === 'point'
+      ? { camera: this.view.groundForward(), rotation: robot.rotation, inverted: robot.uprightness < 0 }
+      : null;
     if (robot) {
       const uses = robot.buttonUses();
       this.touch.setButtons([1, 2, 3, 4].map((n) => buttonLabel(uses.get(`button${n}`), robot!.flames.some((f) => f.def.input.source === `button${n}`))));
@@ -255,7 +258,7 @@ class App {
         h('button', { onclick: () => this.controlsScreen() }, 'Controls'),
         h('button', { onclick: () => this.settingsScreen() }, 'Settings'),
         h('button', { onclick: () => this.howToScreen() }, 'How to play')),
-      (touchOnly || this.touchSeen) && h('div', { class: 'touch-note' }, 'On a phone or tablet: turn it sideways, steer with the stick bottom left and fire with the buttons bottom right. In the garage, tap Hide panels to test-drive.'),
+      (touchOnly || this.touchSeen) && h('div', { class: 'touch-note' }, 'On a phone or tablet: turn it sideways, push the stick bottom left the way you want to go on screen and fire with the buttons bottom right. In the garage, tap Hide panels to test-drive.'),
       h('div', { class: 'hazard-bar' }),
       h('div', { class: 'footnote' }, 'A physics-simulated robot combat game in the spirit of the classic British TV show. Every hit is worked out from real forces — no hit points.')));
   }
@@ -386,7 +389,8 @@ class App {
         row('Referee breaks', 'breaks', onOff, 'Two robots shoving nose to nose and going nowhere for 5 seconds get pulled apart by the referee.'),
         row('House robots', 'houseSet', [['classic', 'Classic'], ['overpowered', 'Overpowered'], ['mixed', 'Mixed']], 'Overpowered: a 1.3 m full-body spinner, a 125 kN hydraulic spike, a giant clamp-lifter and a flame-throwing flipper.'),
         row('Slow motion', 'slowMotion', onOff, 'Time slows for a moment after a really big hit.'),
-        row('Camera shake', 'shake', onOff, 'The camera shakes on big hits.')),
+        row('Camera shake', 'shake', onOff, 'The camera shakes on big hits.'),
+        row('Touch stick', 'stick', [['point', 'Point to drive'], ['robot', 'Robot\'s view']], 'Phones and tablets. Point to drive: the robot goes the way you push the stick on screen. Robot\'s view: up is the robot\'s forward and sideways steers, like an RC transmitter.')),
       h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: () => this.mainMenu() }, 'Back'))));
     render();
   }
@@ -420,7 +424,7 @@ class App {
           h('li', {}, 'Gamepads: left stick drives, A / RT weapon 1, B / LT weapon 2, X and Y weapons 3 and 4, Start pauses. In menus the D-pad moves, A picks, B goes back.'),
           h('li', {}, kb('Esc'), ' pauses (or the Pause button) · ', kb('Tab'), ' cycles the damage display: health diagrams, full report, off'),
           h('li', {}, 'Everything can be remapped under Controls, including tank-style steering.'),
-          h('li', {}, 'Phone or tablet: turn it sideways. The stick bottom left drives, the buttons bottom right fire (labelled with what they do). Tap the damage label at the top to cycle the display. In the garage, Hide panels to test-drive; pinch to zoom.')),
+          h('li', {}, 'Phone or tablet: turn it sideways. Push the stick bottom left the way you want to go on screen — the robot turns and drives that way (Settings → Touch stick switches to the robot\'s-view RC mix). The buttons bottom right fire (labelled with what they do). Tap the damage label at the top to cycle the display. In the garage, Hide panels to test-drive; pinch to zoom.')),
         h('h3', {}, 'Driving'),
         h('ul', {},
           h('li', {}, 'Drive keys build up to full power over a quarter of a second: tap for a small nudge, hold to charge. Let go and the motors brake.'),

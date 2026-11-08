@@ -316,9 +316,12 @@ flipper plates that can't reach the floor, and very high ground clearance.
 - **Fight length:** 3 minutes (1:30 / 3:00 / 5:00 in Settings).
 - **Immobilisation:** if a robot hasn't moved under its own power for 4 s, the
   referee starts a 10-second count. Being shoved around while helpless doesn't
-  count as moving, and nothing that happens while a house robot is touching
-  you does. Once the count has started, it takes 0.4 s of real driving to stop
-  it. Count reaches 10 → out.
+  count as moving. While a house robot is touching you, only moving the way
+  you're driving counts (≥ 0.25 m/s along your heading in the direction of
+  the throttle, or ≥ 0.8 rad/s of yaw the way you're steering) — a shove sends
+  you somewhere else. House robots are sent after anyone at a count of 3, so
+  this is what lets a robot that really is mobile escape. Once the count has
+  started, it takes 0.4 s of real driving to stop it. Count reaches 10 → out.
 - **The pit:** drive onto the pit release button to open the pit. A robot that
   falls in is out.
 - **Out of the arena:** thrown over the wall → out.
@@ -382,8 +385,15 @@ use the same operator.
   nudge; holding is full power. Sticks are proportional already and weapon
   keys are never ramped.
 - **Touch:** on phones and tablets an on-screen thumb-stick (bottom left)
-  drives the first human player arcade-style, through a deadzone and an expo
-  curve (gentle near the centre, full power at the edge), and a button per
+  drives the first human player through a deadzone and an expo curve
+  (gentle near the centre, full power at the edge). By default it's
+  *point to drive*: push the stick the way you want to go on screen and the
+  robot turns to face that way (relative to the camera) and drives there —
+  turn ∝ bearing error (full lock from ~35° off), throttle × cos(error), so a
+  robot facing away pivots first; upside down the drive is reversed for you.
+  Settings → Touch stick switches to the classic RC mix (up = the robot's
+  forward, sideways steers). Robot-relative steering from a fixed TV camera
+  is hard on a phone, which is why point to drive is the default. A button per
   weapon button the robot actually uses (bottom right, labelled Fire, Spin,
   Saw, Grab…) presses that button. Multi-touch, so you can steer and fire at
   once; the keyboard and pads still work alongside. In the garage the stick

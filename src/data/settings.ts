@@ -16,6 +16,11 @@ export interface Settings {
   houseSet: HouseSet;
   /** Fight length, seconds. */
   fightLength: number;
+  /**
+   * Touch stick: 'point' drives the robot the way the stick points on screen;
+   * 'robot' is the classic RC mix (up = the robot's forward, sideways steers).
+   */
+  stick: 'point' | 'robot';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -26,6 +31,7 @@ export const DEFAULT_SETTINGS: Settings = {
   finale: true,
   houseSet: 'classic',
   fightLength: 180,
+  stick: 'point',
 };
 
 const KEY = 'robot-bash.settings.v1';

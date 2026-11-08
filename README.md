@@ -41,8 +41,10 @@ pick, B to go back, Start to fight). `Tab` in a fight cycles the damage display:
 robot with every part coloured by health, that plus the full damage report,
 or nothing. Each player's panel also shows battery, gas and fuel gauges.
 
-**On a phone or tablet**, turn it sideways: a thumb-stick bottom left drives
-(gently near the middle, full power at the edge) and the robot's weapon
+**On a phone or tablet**, turn it sideways: push the thumb-stick bottom left
+the way you want to go on screen and the robot turns and drives that way
+(gently near the middle, full power at the edge; Settings → Touch stick has
+the classic robot's-view RC mix instead), and the robot's weapon
 buttons sit bottom right, labelled with what they do. Tap the damage label at
 the top to cycle the display. In the garage, tap **Hide panels** to test-drive
 with the same controls, and pinch to zoom.

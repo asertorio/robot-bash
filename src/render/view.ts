@@ -620,6 +620,12 @@ export class MatchView {
     return candidates.find((c) => c.mesh === o)?.part.id ?? null;
   }
 
+  /** Which way the camera looks, flattened onto the floor (world x, z). */
+  groundForward(): { x: number; z: number } {
+    const d = this.camera.getWorldDirection(new THREE.Vector3());
+    return { x: d.x, z: d.z };
+  }
+
   /** Screen position of a robot (for name tags), or null if behind camera. */
   screenPos(r: Robot): { x: number; y: number } | null {
     const p = r.position;

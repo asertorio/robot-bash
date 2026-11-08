@@ -1,4 +1,5 @@
 import type { ControlState } from '../sim/control';
+import { qconj, qrotate, type Q } from '../sim/vmath';
 import { DEFAULT_KEY_RAMP, parseMacro, type Action, type Binding, type ControlProfile, type MacroStep } from './bindings';
 
 const DEADZONE = 0.15;
@@ -48,17 +49,73 @@ export interface TouchState {
   /** Stick, −1..1: x right, y down (screen directions), after deadzone and expo. */
   x: number;
   y: number;
+  /** The same stick with expo on its distance from centre instead: direction kept, magnitude 0..1. */
+  rx: number;
+  ry: number;
   /** Weapon buttons 1–4. */
   buttons: [boolean, boolean, boolean, boolean];
 }
 
 /**
- * Add the touch controls to a player's controls. The stick mixes like an
- * arcade transmitter (up is forward, sideways steers); when it's centred the
- * keyboard or pad still drives. Weapon buttons add to whatever else is held.
+ * Where the touch-driven robot is and which way the camera looks, so the stick
+ * can mean "go that way on screen". Set by the app each frame.
  */
-export function withTouch(c: ControlState, t: TouchState, profile: ControlProfile): ControlState {
+export interface StickPose {
+  /** The camera's view direction flattened onto the floor (world x, z; any length). */
+  camera: { x: number; z: number };
+  /** The robot chassis's orientation. */
+  rotation: Q;
+  /** Upside down (controls run reversed, as for a real robot). */
+  inverted: boolean;
+}
+
+/**
+ * Point-to-drive steering. Bearing error (rad) → turn: full lock from about
+ * 35° off, easing in below so the robot settles onto the line instead of
+ * wagging. Throttle falls with cos(error), so a robot facing away pivots on
+ * the spot first and only drives off once it's roughly lined up — what a
+ * driver does by hand.
+ */
+const POINT = { turnGain: 1.6, minTurn: 0.45 };
+
+/**
+ * Turn a screen-direction stick into left/right throttles: the robot turns to
+ * face where the stick points (relative to the camera) and drives that way,
+ * whichever way it's facing on screen. On a phone that's far easier than
+ * steering a tank from its own point of view.
+ */
+export function pointToDrive(sx: number, sy: number, pose: StickPose): { left: number; right: number } {
+  const mag = Math.min(1, Math.hypot(sx, sy));
+  if (mag === 0) return { left: 0, right: 0 };
+  const cl = Math.hypot(pose.camera.x, pose.camera.z) || 1;
+  const f = { x: pose.camera.x / cl, z: pose.camera.z / cl };
+  // Screen right is the camera's right on the floor: forward × up.
+  const want = { x: -f.z * sx - f.x * sy, y: 0, z: f.x * sx - f.z * sy };
+  const rel = qrotate(qconj(pose.rotation), want);
+  if (pose.inverted) rel.x = -rel.x;
+  const bearing = Math.atan2(rel.x, rel.z); // + = wanted direction is to its left
+  const turn = Math.max(-1, Math.min(1, -bearing * POINT.turnGain)) * Math.max(POINT.minTurn, mag);
+  const throttle = mag * Math.max(0, Math.cos(bearing));
+  let left = throttle + turn, right = throttle - turn;
+  const over = Math.max(1, Math.abs(left), Math.abs(right));
+  left /= over;
+  right /= over;
+  // Upside down the drive runs backwards and the sides swap over.
+  return pose.inverted ? { left: -right, right: -left } : { left, right };
+}
+
+/**
+ * Add the touch controls to a player's controls. With a pose the stick is
+ * point-to-drive (see `pointToDrive`); without one it mixes like an arcade
+ * transmitter (up is the robot's forward, sideways steers). When it's centred
+ * the keyboard or pad still drives. Weapon buttons add to whatever else is held.
+ */
+export function withTouch(c: ControlState, t: TouchState, profile: ControlProfile, pose: StickPose | null = null): ControlState {
   const out = { ...c, weapon: c.weapon || t.buttons[0], weapon2: c.weapon2 || t.buttons[1], weapon3: !!c.weapon3 || t.buttons[2], weapon4: !!c.weapon4 || t.buttons[3] };
+  if (pose) {
+    if (t.rx === 0 && t.ry === 0) return out;
+    return { ...out, ...pointToDrive(t.rx, t.ry, pose) };
+  }
   if (t.x === 0 && t.y === 0) return out;
   const throttle = -t.y;
   const turn = t.x * profile.turnRate;
@@ -125,6 +182,8 @@ export class InputManager {
   /** On-screen touch controls, and which player they drive (null when hidden). */
   touch: TouchState | null = null;
   touchPlayer = 0;
+  /** For point-to-drive: the touch robot's pose and the camera (null = robot-relative stick). */
+  touchPose: StickPose | null = null;
   private captureBaseline: (Gamepad | null)[] = [];
   /** Codes bound to anything, so we can stop the page scrolling on arrows/space. */
   private boundCodes = new Set<string>();
@@ -196,7 +255,7 @@ export class InputManager {
       this.ramp = p.keyRamp ?? DEFAULT_KEY_RAMP;
       this.runners[i].update(p, this.read, dtMs);
       const c = mixControls(p, this.read, this.runners[i].active);
-      return this.touch && i === this.touchPlayer ? withTouch(c, this.touch, p) : c;
+      return this.touch && i === this.touchPlayer ? withTouch(c, this.touch, p, this.touchPose) : c;
     });
     this.tapped.clear();
     return out;
