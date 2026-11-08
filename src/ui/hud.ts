@@ -150,6 +150,15 @@ export class Hud {
   private gauges(r: Robot): HTMLElement[] {
     const out = [gauge('Batt', r.energy / Math.max(1e-6, r.battery.capacity), `${Math.round((100 * r.energy) / Math.max(1e-6, r.battery.capacity))}%`)];
     if (r.gasCapacity > 0) out.push(gauge('Gas', r.gasLeft / r.gasCapacity, `${shotsLeft(r)} shots`, { colour: '#6cb6e8' }));
+    for (const l of r.launchers) {
+      if (l.def.tether) {
+        const what = l.loaded ? 'loaded' : l.cable?.round.embed ? 'stuck in!' : l.cable ? 'out' : 'gone';
+        out.push(gauge('Harpoon', l.loaded ? 1 : l.cable ? 0.5 : 0, what, { colour: '#9fb3c8' }));
+      } else {
+        const total = 1 + (l.def.rounds ?? 0), left = r.roundsLeft(l);
+        out.push(gauge('Rounds', left / total, `${left} left`, { colour: '#c8a45f' }));
+      }
+    }
     for (const fl of r.flames) out.push(gauge('Fuel', fl.fuel / Math.max(1e-6, fl.def.fuel), `${fl.fuel.toFixed(1)} kg`, { colour: '#ff8a3a' }));
     return out;
   }
@@ -169,7 +178,7 @@ export class Hud {
   }
 
   private damageTable(r: Robot): HTMLTableElement {
-    const rows = r.parts.map((p) => {
+    const rows = r.parts.filter((p) => !r.isAmmo(p)).map((p) => {
       const c = conditionLabel(p.condition);
       return h('tr', {}, h('td', {}, p.label), h('td', { class: `cond-${c}` }, p.detached && c !== 'Destroyed' ? 'Detached' : c));
     });

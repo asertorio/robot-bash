@@ -101,6 +101,10 @@ and the key ramp, and write macros such as `weapon 150, back+left 300`.
 - **Crushers and spikes pierce under steady force** once they push past what
   the plate can take (about 4 kN for 6 mm aluminium, 19 kN for 6 mm hardened
   steel). Hydraulic crushers have no gas to run out of.
+- **Projectiles are just parts thrown by a ram.** Their speed is the ram's
+  work, their punch is their momentum, and a pointed harpoon sticks only into
+  plate it can pierce — it glances off a hardened wedge. A winch pulls both
+  ends of the cable, so a light robot reels itself in to a heavy one.
 
 ## The robots
 
@@ -128,6 +132,12 @@ listed too.
 | Tailspin | Thwackbot: spins to swing a spiked mace on a tail | 56 kg |
 | Gemini | Twin counter-rotating saw discs | 76 kg |
 | Vicegrip | Hydraulic crusher, no gas, unlimited bites | 86 kg |
+| Whaler | Harpoon on 6 m of cable, and a winch to drag what it hits | 94 kg |
+
+**Open class:** **Bombard** fires 2 kg steel cannonballs — eight of them,
+one every 1.2 s. Little damage, but a real shove from across the arena.
+Free-flying projectiles are banned in the weight classes; Whaler's harpoon
+is allowed because it's on a cable.
 
 **House robots**, far over the competitor limits and also selectable:
 **Ironjaw** (a 254 kg lifter on a 50-bar ram), **Buzzard** (a vertical
@@ -166,14 +176,16 @@ rolling balls, flails…
 - **Your own parts:** every catalogue dropdown has *New custom part…*, which
   copies a spec for you to change.
 - **Ready-made assemblies** in the parts menu: a walking leg, an axe, a
-  spinner, a ram spike, a crusher jaw, a flail, a sprung suspension wheel and
-  a flamethrower. Mirror a part to the other side with everything on it.
+  spinner, a ram spike, a crusher jaw, a flail, a sprung suspension wheel, a
+  flamethrower, a harpoon gun and a gas cannon. Any part on a ram slider can
+  be set to fire off the end: pick the cable, winch, spare rounds and reload
+  time. Mirror a part to the other side with everything on it.
 
 Stats update as you build: weight, cost, top speed and pushing force, battery
 life, each weapon's force or stored energy and spin-up time, spares and
 rebuild time, and a full parts list. **Scrutineering** checks the weight
 class (feather to super-heavy, or **Open**, which has no limits and allows
-flamethrowers), budget, size, parts below the floor, voltage, gas, wiring and
+flamethrowers and cannons), budget, size, parts below the floor, voltage, gas, wiring and
 battery life. The **test bay** behind the editor lets you drive the robot
 against a crash-test dummy, with live telemetry, gauges and a health diagram.
 

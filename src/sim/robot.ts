@@ -1,13 +1,14 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { hardnessOf, material } from '../data/materials';
 import { BATTERIES, GEARBOX, MOTORS, RAMS, TANKS, VALVES, WHEELS, lookup, type MotorSpec, type RamSpec } from '../data/parts';
-import { actuatorMass, faceArea, partFrames, partMass, registerCatalog, resolveShape, root, shapeHalf, solidThickness, unit } from './assembly';
+import { actuatorMass, faceArea, partFrames, partMass, registerCatalog, resolveShape, rigidGroup, root, shapeHalf, solidThickness, unit } from './assembly';
 import { convexPieces, hullMetrics, pieceMassProps, shapeVolume, type Piece } from './shapes';
 import type { ControlState } from './control';
 import { COMPONENT_TOUGHNESS, CUT, DAMAGE, HEAT, SHOCK, WHEEL_TOUGHNESS, damageFor, plateToughness, transmission, type Toughness } from './damage';
-import type { ActuatorDef, ChainDef, EdgeKind, InputDef, PartDef, RobotDesign, Shape } from './design';
+import type { ActuatorDef, ChainDef, EdgeKind, InputDef, LaunchDef, PartDef, RobotDesign, Shape } from './design';
+import { LAUNCH, launcherExtras } from './launch';
 import { DEBRIS_GROUPS, GHOST_GROUPS, robotGroups, wheelBodyGroups, wheelTyreGroups } from './groups';
-import { dcMotor } from './motor';
+import { RPM_TO_RADS, dcMotor } from './motor';
 import { electronicsMass, gasDensity } from './stats';
 import { mulberry32, principalAxes, qaxis, qconj, qmul, qrotate, twistAngle, vadd, vdot, vlen, vscale, vsub, type Q, type V3 } from './vmath';
 
@@ -55,6 +56,8 @@ export interface Part {
   /** How its edge cuts. */
   edge: EdgeKind;
 }
+
+export type ButtonUse = 'spinner' | 'pneumatic' | 'servo' | 'motor' | 'chain' | 'cannon' | 'harpoon' | 'cut' | 'winch';
 
 export interface RobotEvent {
   robot: number;
@@ -105,6 +108,38 @@ export interface Actuator {
   locomotion: boolean;
   /** Soft start: the throttle the speed controller has ramped up to so far. */
   ramp: number;
+}
+
+/** A round: the body it rides on and the parts on it. */
+export interface Round {
+  info: BodyInfo;
+  parts: Part[];
+  /** Robot clock (s) when it left the barrel. */
+  firedAt: number;
+  /** Stuck into something (a harpoon or bolt that pierced a plate). */
+  embed: RAPIER.ImpulseJoint | null;
+}
+
+/** A cannon or harpoon gun (see LaunchDef and sim/launch.ts). */
+export interface Launcher {
+  def: LaunchDef;
+  partDef: PartDef;
+  act: Actuator;
+  /** Round in the barrel, or null once fired (until reloaded or reeled back in). */
+  loaded: Round | null;
+  spares: Round[];
+  reloadIn: number;
+  /** Rounds that have left the barrel. */
+  fired: Round[];
+  /** Spare rounds, cable and winch: one mass on the launcher's mount that can be damaged. */
+  mount: Part;
+  /** Built position of the round's body origin relative to the mount body, and where the muzzle is. */
+  anchor: V3;
+  muzzle: V3;
+  cable: { round: Round; joint: RAPIER.ImpulseJoint | null; length: number; jointLength: number; taut: boolean } | null;
+  /** The winch, as an actuator-like input (for toggle/hold handling). */
+  winch: { def: { input: InputDef }; toggled: boolean; wasPressed: boolean; speed: number } | null;
+  wasPressed: boolean;
 }
 
 export interface Rotor {
@@ -167,6 +202,11 @@ export class Robot {
   /** Flamethrowers fitted, and whether each is lit right now. */
   readonly flames: Array<{ part: Part; def: Extract<NonNullable<PartDef['component']>, { type: 'flamethrower' }>; dir: V3; fuel: number; on: boolean; toggled: boolean; wasPressed: boolean }> = [];
 
+  /** Cannons and harpoon guns fitted. */
+  readonly launchers: Launcher[] = [];
+  /** Seconds this robot has existed (for timing rounds in flight). */
+  private clock = 0;
+
   /** Lit flamethrowers: nozzle position, direction and reach, world space. */
   activeFlames(): Array<{ origin: V3; dir: V3; range: number }> {
     return this.flames.filter((f) => f.on && f.part.collider && f.part.body).map((f) => ({
@@ -216,55 +256,7 @@ export class Robot {
     this.chassis = this.bodies_.get(rootPart.id)!.body;
 
     // Colliders.
-    for (const p of ordered) {
-      const info = this.bodies_.get(bodyOf(p))!;
-      const f = frames.get(p.id)!;
-      const rs = resolveShape(p);
-      const centre = vsub(vadd(f.pos, qrotate(f.rot, rs.offset)), info.origin);
-      const rot = qmul(f.rot, rs.rot);
-      const part = this.addPart({
-        id: p.id, label: p.label, kind: p.role, def: p, local: centre, bodyKey: info.key,
-        internal: p.role === 'component',
-        material: p.role === 'wheel' ? 'rubber' : p.role === 'component' ? 'aluminium' : p.material ?? 'aluminium',
-        thickness: p.role === 'structure' ? p.wall ?? solidThickness(rs.shape) : 4,
-        edge: p.role === 'structure' ? p.edge ?? 'blunt' : 'blunt',
-        toughness: p.role === 'wheel' ? WHEEL_TOUGHNESS : p.role === 'component' ? COMPONENT_TOUGHNESS
-          : plateToughness(p.material ?? 'aluminium', p.wall ?? solidThickness(rs.shape), faceArea(rs.shape)),
-        visual: { shape: rs.shape, pos: centre, rot },
-        colour: p.colour ? hex(p.colour) : p.role === 'wheel' ? 0x1b1b1b : p.role === 'component' ? 0x2c3036
-          : p.material && ['ptfe', 'rubber', 'hardox', 'titanium', 'mildSteel'].includes(p.material) && p.parent !== null ? material(p.material).colour : paint,
-      });
-      part.body = info.body;
-      if (p.role === 'wheel') {
-        const spec = lookup(WHEELS, p.wheel!, 'wheel');
-        // Rapier's cylinder-on-box contact makes resting wheels creep, so the
-        // floor sees a sphere of the same radius; other robots see the cylinder.
-        this.attachShape(part, rs.shape, centre, rot, partMass(p), info.body, wheelBodyGroups(index), Math.min(spec.grip, TYRE_SIDE_GRIP), ROBOT_RESTITUTION);
-        part.tyre = world.createCollider(
-          RAPIER.ColliderDesc.ball(spec.radius).setTranslation(centre.x, centre.y, centre.z).setMass(0.01).setFriction(spec.grip).setRestitution(0.05)
-            .setCollisionGroups(wheelTyreGroups(index))
-            .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(DAMAGE.EVENT_THRESHOLD),
-          info.body,
-        );
-        this.byCollider.set(part.tyre.handle, part);
-      } else if (p.role === 'component') {
-        this.attachShape(part, rs.shape, centre, rot, partMass(p), info.body, GHOST_GROUPS, 0.4, 0.1);
-        if (p.component!.type === 'battery') this.batteryParts.push(part);
-        if (p.component!.type === 'flamethrower') {
-          const c = p.component!;
-          this.flames.push({ part, def: c, dir: qrotate(f.rot, { x: 0, y: 0, z: 1 }), fuel: c.fuel, on: false, toggled: false, wasPressed: false });
-          // The nozzle is out in the open, not behind armour.
-          part.internal = false;
-        }
-        if (p.component!.type === 'gasTank') {
-          this.tankParts.push(part);
-          this.gasCapacity += lookup(TANKS, p.component!.part, 'tank').capacity;
-        }
-      } else {
-        this.attachShape(part, rs.shape, centre, rot, partMass(p), info.body, this.groups, material(p.material ?? 'aluminium').friction, ROBOT_RESTITUTION);
-        if (p.chain && p.edge === 'saw') this.chains.push({ part, def: p.chain, on: false, toggled: false, wasPressed: false });
-      }
-    }
+    for (const p of ordered) this.makePart(p, this.bodies_.get(bodyOf(p))!, frames.get(p.id)!, paint);
     this.gasLeft = this.gasCapacity;
 
     // Joints and the motors / rams / servos on them.
@@ -294,6 +286,8 @@ export class Robot {
       }
     }
 
+    for (const p of ordered) if (p.launch) this.addLauncher(design, p, p.launch, frames, paint, toWorld(this.bodies_.get(p.id)!.origin), spawnRot);
+
     // Hard-metal parts of a spinning weapon are its teeth: they cut.
     for (const a of this.actuators) {
       if (a.def.type !== 'motor' || a.locomotion) continue;
@@ -313,6 +307,56 @@ export class Robot {
     this.electronicsPart.body = this.chassis;
     const em = electronicsMass(design);
     this.attach(this.electronicsPart, RAPIER.ColliderDesc.ball(Math.cbrt((3 * em) / (4 * Math.PI * 2500))).setMass(em), this.chassis, GHOST_GROUPS);
+  }
+
+  /** Build one design part's colliders on a body (`id` renames it: spare rounds). */
+  private makePart(p: PartDef, info: BodyInfo, f: { pos: V3; rot: Q }, paint: number, id?: string): Part {
+    const rs = resolveShape(p);
+    const centre = vsub(vadd(f.pos, qrotate(f.rot, rs.offset)), info.origin);
+    const rot = qmul(f.rot, rs.rot);
+    const part = this.addPart({
+      id: id ?? p.id, label: p.label, kind: p.role, def: p, local: centre, bodyKey: info.key,
+      internal: p.role === 'component',
+      material: p.role === 'wheel' ? 'rubber' : p.role === 'component' ? 'aluminium' : p.material ?? 'aluminium',
+      thickness: p.role === 'structure' ? p.wall ?? solidThickness(rs.shape) : 4,
+      edge: p.role === 'structure' ? p.edge ?? 'blunt' : 'blunt',
+      toughness: p.role === 'wheel' ? WHEEL_TOUGHNESS : p.role === 'component' ? COMPONENT_TOUGHNESS
+        : plateToughness(p.material ?? 'aluminium', p.wall ?? solidThickness(rs.shape), faceArea(rs.shape)),
+      visual: { shape: rs.shape, pos: centre, rot },
+      colour: p.colour ? hex(p.colour) : p.role === 'wheel' ? 0x1b1b1b : p.role === 'component' ? 0x2c3036
+        : p.material && ['ptfe', 'rubber', 'hardox', 'titanium', 'mildSteel'].includes(p.material) && p.parent !== null ? material(p.material).colour : paint,
+    });
+    part.body = info.body;
+    if (p.role === 'wheel') {
+      const spec = lookup(WHEELS, p.wheel!, 'wheel');
+      // Rapier's cylinder-on-box contact makes resting wheels creep, so the
+      // floor sees a sphere of the same radius; other robots see the cylinder.
+      this.attachShape(part, rs.shape, centre, rot, partMass(p), info.body, wheelBodyGroups(this.index), Math.min(spec.grip, TYRE_SIDE_GRIP), ROBOT_RESTITUTION);
+      part.tyre = this.world.createCollider(
+        RAPIER.ColliderDesc.ball(spec.radius).setTranslation(centre.x, centre.y, centre.z).setMass(0.01).setFriction(spec.grip).setRestitution(0.05)
+          .setCollisionGroups(wheelTyreGroups(this.index))
+          .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(DAMAGE.EVENT_THRESHOLD),
+        info.body,
+      );
+      this.byCollider.set(part.tyre.handle, part);
+    } else if (p.role === 'component') {
+      this.attachShape(part, rs.shape, centre, rot, partMass(p), info.body, GHOST_GROUPS, 0.4, 0.1);
+      if (p.component!.type === 'battery') this.batteryParts.push(part);
+      if (p.component!.type === 'flamethrower') {
+        const c = p.component!;
+        this.flames.push({ part, def: c, dir: qrotate(f.rot, { x: 0, y: 0, z: 1 }), fuel: c.fuel, on: false, toggled: false, wasPressed: false });
+        // The nozzle is out in the open, not behind armour.
+        part.internal = false;
+      }
+      if (p.component!.type === 'gasTank') {
+        this.tankParts.push(part);
+        this.gasCapacity += lookup(TANKS, p.component!.part, 'tank').capacity;
+      }
+    } else {
+      this.attachShape(part, rs.shape, centre, rot, partMass(p), info.body, this.groups, material(p.material ?? 'aluminium').friction, ROBOT_RESTITUTION);
+      if (p.chain && p.edge === 'saw') this.chains.push({ part, def: p.chain, on: false, toggled: false, wasPressed: false });
+    }
+    return part;
   }
 
   private addActuator(p: PartDef, def: ActuatorDef, child: BodyInfo, parent: BodyInfo, axis: V3, anchor: V3, limits: [number, number] | null) {
@@ -342,6 +386,253 @@ export class Robot {
     }
     if (def.type === 'servo') (child.joint as RAPIER.RevoluteImpulseJoint).configureMotorModel(RAPIER.MotorModel.ForceBased);
     this.actuators.push(act);
+  }
+
+  /**
+   * Fit a launcher: the round already built on its slider is the first; the
+   * spares are built now as copies, parked (disabled) until loaded. Their
+   * mass, the cable and the winch ride on the mount as one weight.
+   */
+  private addLauncher(d: RobotDesign, p: PartDef, l: LaunchDef, frames: Map<string, { pos: V3; rot: Q }>, paint: number, at: V3, rot: Q) {
+    const act = this.actuators.find((a) => a.driven.id === p.id);
+    if (!act || act.def.type !== 'pneumatic' || act.joint !== 'slider') return;
+    const group = rigidGroup(d, p.id);
+    const first: Round = { info: act.child, parts: this.parts.filter((q) => q.bodyKey === act.child.key), firedAt: 0, embed: null };
+    const spares: Round[] = [];
+    for (let k = 1; k <= (l.rounds ?? 0); k++) {
+      const key = `${p.id}~${k}`;
+      const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(at.x, at.y, at.z).setRotation(rot)
+        .setLinearDamping(AIR_DAMPING).setAngularDamping(0.01).setCcdEnabled(true).setEnabled(false));
+      const info: BodyInfo = { key, body, parent: act.parent, origin: act.child.origin, joint: null, detached: true };
+      this.bodies_.set(key, info);
+      const parts = group.map((id) => this.makePart(d.parts.find((q) => q.id === id)!, info, frames.get(id)!, paint, `${id}~${k}`));
+      for (const q of parts) q.detached = true;
+      spares.push({ info, parts, firedAt: 0, embed: null });
+    }
+    const x = launcherExtras(d, p, l);
+    const mass = Math.max(0.01, x.spares + x.cable + x.winch);
+    const what = l.tether?.winch ? 'winch' : l.tether ? 'cable reel' : 'magazine';
+    const mount = this.addPart({ id: `${p.id}-mount`, label: `${p.label} ${what}`, kind: 'actuator', local: act.anchor, bodyKey: act.parent.key, internal: true, toughness: COMPONENT_TOUGHNESS, material: 'mildSteel', thickness: 4, edge: 'blunt' });
+    mount.body = act.parent.body;
+    this.attach(mount, RAPIER.ColliderDesc.ball(Math.cbrt((3 * mass) / (4 * Math.PI * 4000))).setTranslation(act.anchor.x, act.anchor.y, act.anchor.z).setMass(mass), act.parent.body, GHOST_GROUPS);
+    const stroke = act.limits ? act.limits[1] : 0;
+    this.launchers.push({
+      def: l, partDef: p, act, loaded: first, spares, reloadIn: 0, fired: [], mount,
+      anchor: act.anchor, muzzle: vadd(act.anchor, vscale(act.axis, stroke)),
+      cable: null, winch: l.tether?.winch ? { def: { input: l.tether.winch.input }, toggled: false, wasPressed: false, speed: 0 } : null, wasPressed: false,
+    });
+  }
+
+  /** Rounds still to fire: the one in the barrel plus spares. */
+  roundsLeft(l: Launcher): number {
+    return (l.loaded ? 1 : 0) + l.spares.length;
+  }
+
+  /** Is this part (any part of) a cannon round or harpoon — loaded, spare or fired? Ammunition, not robot. */
+  isAmmo(part: Part): boolean {
+    return this.launchers.some((l) => l.loaded?.parts.includes(part) || l.spares.some((r) => r.parts.includes(part)) || l.fired.some((r) => r.parts.includes(part)));
+  }
+
+  /** Is this one of our rounds out of the barrel? */
+  roundOf(part: Part): Round | null {
+    for (const l of this.launchers) for (const r of l.fired) if (r.parts.includes(part)) return r;
+    return null;
+  }
+
+  /** Cables between launchers and their rounds, world space, for drawing. */
+  cables(): Array<{ from: V3; to: V3; taut: boolean }> {
+    return this.launchers.flatMap((l) => (l.cable ? [{ from: this.mountPoint(l, l.muzzle), to: l.cable.round.info.body.translation(), taut: l.cable.taut }] : []));
+  }
+
+  private mountPoint(l: Launcher, local: V3): V3 {
+    const b = l.act.parent.body;
+    return vadd(b.translation(), qrotate(b.rotation(), local));
+  }
+
+  /** Fire, reload, cut the cable, and run the winch. Returns current drawn (A). */
+  private updateLaunchers(c: ControlState, voltage: number, dt: number): number {
+    let amps = 0;
+    for (const l of this.launchers) {
+      const a = l.act;
+      const held = this.buttonHeld(a.def.input, c);
+      const pressed = held && !l.wasPressed;
+      l.wasPressed = held;
+      const mountOk = !l.act.parent.detached && !l.mount.failed;
+      // Knocked out of the barrel by a hit: that round's lost; load another.
+      if (l.loaded && !l.loaded.info.joint) {
+        l.loaded.firedAt = this.clock;
+        l.fired.push(l.loaded);
+        l.loaded = null;
+        l.reloadIn = l.def.reload ?? LAUNCH.RELOAD;
+      }
+      // Out of the barrel at the end of the stroke — let go the step before
+      // it would reach the end stop, or the stop would catch it.
+      if (l.loaded && a.child.joint && a.firing && a.limits && a.position + Math.max(0, a.speed) * dt >= a.limits[1] - LAUNCH.RELEASE) this.release(l);
+      // Second press with the harpoon out: cut it loose.
+      else if (!l.loaded && pressed && l.cable) this.cutCable(l);
+      for (const r of l.fired) {
+        if (r === l.cable?.round || this.clock - r.firedAt < LAUNCH.SAFE_TIME) continue;
+        // Clear of the robot that fired it: ordinary debris now.
+        for (const q of r.parts) for (const col of this.collidersOf(q)) if (col.collisionGroups() !== DEBRIS_GROUPS) col.setCollisionGroups(DEBRIS_GROUPS);
+      }
+      // Load the next round.
+      if (!l.loaded && !l.cable && l.spares.length && mountOk) {
+        l.reloadIn -= dt;
+        if (l.reloadIn <= 0) this.seat(l, l.spares.shift()!);
+      }
+      if (l.cable && l.winch) amps += this.runWinch(l, c, voltage, dt, mountOk);
+      else if (l.cable) this.spool(l, false);
+    }
+    return amps;
+  }
+
+  /** Let the round go: it flies on with the speed the ram gave it. */
+  private release(l: Launcher) {
+    const r = l.loaded!;
+    const a = l.act;
+    if (r.info.joint) { this.world.removeImpulseJoint(r.info.joint, true); r.info.joint = null; }
+    r.info.detached = true;
+    for (const q of r.parts) q.detached = true;
+    r.firedAt = this.clock;
+    l.fired.push(r);
+    l.loaded = null;
+    l.reloadIn = l.def.reload ?? LAUNCH.RELOAD;
+    a.firing = false;
+    const t = l.def.tether;
+    if (t) {
+      // The drum free-spools: cable pays out as far as the round flies.
+      l.cable = { round: r, joint: null, length: 0, jointLength: -1, taut: false };
+      this.setRope(l, t.length);
+    }
+    this.updateMountMass(l);
+  }
+
+  /** Put a round in the barrel at its built position, on a fresh slider joint. */
+  private seat(l: Launcher, r: Round) {
+    const a = l.act;
+    const pb = a.parent.body;
+    const pos = vadd(pb.translation(), qrotate(pb.rotation(), l.anchor));
+    const b = r.info.body;
+    if (r.embed) { this.world.removeImpulseJoint(r.embed, true); r.embed = null; }
+    b.setEnabled(true);
+    b.setTranslation(pos, true);
+    b.setRotation(pb.rotation(), true);
+    const v = pb.velocityAtPoint(pos);
+    b.setLinvel(v, true);
+    b.setAngvel(pb.angvel(), true);
+    const joint = this.world.createImpulseJoint(RAPIER.JointData.prismatic(l.anchor, { x: 0, y: 0, z: 0 }, a.axis), pb, b, true) as RAPIER.PrismaticImpulseJoint;
+    if (a.limits) joint.setLimits(a.limits[0], a.limits[1]);
+    r.info.joint = joint;
+    r.info.detached = false;
+    for (const q of r.parts) {
+      q.detached = false;
+      for (const col of this.collidersOf(q)) col.setCollisionGroups(this.groups);
+    }
+    l.fired = l.fired.filter((x) => x !== r);
+    a.child = r.info;
+    a.driven = r.parts[0];
+    a.firing = false;
+    a.position = 0;
+    a.speed = 0;
+    l.loaded = r;
+    this.updateMountMass(l);
+  }
+
+  private cutCable(l: Launcher) {
+    if (!l.cable) return;
+    if (l.cable.joint) this.world.removeImpulseJoint(l.cable.joint, true);
+    l.cable = null;
+    this.emit('cuts its harpoon loose', 'info');
+  }
+
+  /** (Re)build the rope joint: the most cable that can be out right now. */
+  private setRope(l: Launcher, length: number) {
+    const cab = l.cable!;
+    if (cab.joint) this.world.removeImpulseJoint(cab.joint, true);
+    cab.joint = this.world.createImpulseJoint(RAPIER.JointData.rope(length, l.muzzle, { x: 0, y: 0, z: 0 }), l.act.parent.body, cab.round.info.body, true);
+    cab.jointLength = length;
+  }
+
+  /**
+   * Cable geometry this step. Not winding in, the drum free-spools: cable
+   * pays out to follow the round (up to its full length) and the rope only
+   * stops it at the end. Winding in, the drum ratchets: the rope is held at
+   * what's been wound in so far.
+   */
+  private spool(l: Launcher, reeling: boolean): { A: V3; B: V3; d: number; dir: V3 } {
+    const cab = l.cable!;
+    const max = l.def.tether!.length;
+    const A = this.mountPoint(l, l.muzzle), B = cab.round.info.body.translation();
+    const span = vsub(B, A);
+    const d = vlen(span);
+    const dir = d > 1e-6 ? vscale(span, 1 / d) : { x: 0, y: 1, z: 0 };
+    if (!reeling) cab.length = Math.min(max, Math.max(cab.length, d));
+    cab.taut = d >= cab.length - 0.02;
+    const want = reeling ? cab.length : max;
+    if (Math.abs(want - cab.jointLength) > LAUNCH.ROPE_STEP) this.setRope(l, want);
+    return { A, B, d, dir };
+  }
+
+  /**
+   * The winch: a DC motor through a gearbox onto a drum. Taut, it pulls with
+   * torque × gear ÷ drum radius at whatever speed the load allows (the motor
+   * model does the torque/speed trade-off), on both ends of the cable — so a
+   * light robot reels itself towards a heavy one as much as the other way.
+   * Slack, it just winds in at its free speed. −1 lets the drum free-spool.
+   */
+  private runWinch(l: Launcher, c: ControlState, voltage: number, dt: number, mountOk: boolean): number {
+    const cab = l.cable!, w = l.def.tether!.winch!, st = l.winch!;
+    const cmd = Math.max(-1, Math.min(1, this.command(st, c)));
+    const reeling = cmd > 1e-3 && this.powered && mountOk;
+    if (!reeling) { st.speed = 0; this.spool(l, false); return 0; }
+    const motor = lookup(MOTORS, w.motor, 'motor');
+    const r = w.drum / 1000;
+    const health = 0.3 + 0.7 * l.mount.condition;
+    const { A, B, d, dir } = this.spool(l, true);
+    let amps: number;
+    if (cab.taut) {
+      // Drum speed from how fast the ends are closing.
+      const sep = vdot(vsub(cab.round.info.body.velocityAtPoint(B), l.act.parent.body.velocityAtPoint(A)), dir);
+      st.speed = -sep / r;
+      const out = dcMotor(motor, voltage, cmd, st.speed * w.gear, health);
+      const tension = Math.max(0, (out.torque * w.gear * GEARBOX.efficiency) / r);
+      const imp = vscale(dir, tension * dt);
+      cab.round.info.body.applyImpulseAtPoint(vscale(imp, -1), B, true);
+      l.act.parent.body.applyImpulseAtPoint(imp, A, true);
+      amps = out.current;
+      cab.length = Math.max(0.05, Math.min(cab.length, d));
+    } else {
+      // Slack: the drum takes it in at free speed.
+      const free = (motor.freeSpeed * RPM_TO_RADS * (voltage / motor.voltage) * health) / w.gear;
+      st.speed = free * cmd;
+      cab.length = Math.max(d, cab.length - free * r * cmd * dt);
+      amps = motor.freeCurrent * cmd;
+    }
+    // Back at the muzzle and not stuck in anything: it drops back into the barrel.
+    if (d < LAUNCH.REDOCK && !cab.round.embed) {
+      const round = cab.round;
+      if (cab.joint) this.world.removeImpulseJoint(cab.joint, true);
+      l.cable = null;
+      this.seat(l, round);
+    }
+    return amps;
+  }
+
+  /** A pointed round has gone into `target`'s plate: weld it there where it is. */
+  embed(r: Round, target: RAPIER.RigidBody) {
+    if (r.embed) return;
+    const b = r.info.body;
+    const p = b.translation(), q = b.rotation();
+    const tq = target.rotation();
+    const local = qrotate(qconj(tq), vsub(p, target.translation()));
+    r.embed = this.world.createImpulseJoint(RAPIER.JointData.fixed({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0, w: 1 }, local, qmul(qconj(tq), q)), b, target, true);
+  }
+
+  private updateMountMass(l: Launcher) {
+    const d = this.design;
+    const x = launcherExtras(d, l.partDef, l.def);
+    const per = l.def.rounds ? x.spares / l.def.rounds : 0;
+    l.mount.collider?.setMass(Math.max(0.01, per * l.spares.length + x.cable + x.winch));
   }
 
   private addPart(p: Omit<Part, 'condition' | 'failed' | 'collider' | 'extra' | 'body' | 'exposed' | 'detached' | 'announced'>): Part {
@@ -438,8 +729,19 @@ export class Robot {
   }
 
   /** Which buttons do something, and what kind of thing. */
-  buttonUses(): Map<string, Set<'spinner' | 'pneumatic' | 'servo' | 'motor' | 'chain'>> {
-    const out = new Map<string, Set<'spinner' | 'pneumatic' | 'servo' | 'motor' | 'chain'>>();
+  buttonUses(): Map<string, Set<ButtonUse>> {
+    const out = new Map<string, Set<ButtonUse>>();
+    const use = (src: string, kind: ButtonUse) => {
+      if (!src.startsWith('button')) return;
+      if (!out.has(src)) out.set(src, new Set());
+      out.get(src)!.add(kind);
+    };
+    for (const l of this.launchers) {
+      if (l.act.parent.detached) continue;
+      // A harpoon that's out: the same button cuts it loose.
+      use(l.act.def.input.source, l.def.tether ? (l.cable ? 'cut' : 'harpoon') : 'cannon');
+      if (l.winch && (l.cable || l.def.tether)) use(l.winch.def.input.source, 'winch');
+    }
     for (const ch of this.chains) {
       const src = ch.def.input.source;
       if (!src.startsWith('button') || ch.part.detached) continue;
@@ -447,7 +749,7 @@ export class Robot {
       out.get(src)!.add('chain');
     }
     for (const a of this.actuators) {
-      if (!a.def.input.source.startsWith('button') || !a.child.joint) continue;
+      if (!a.def.input.source.startsWith('button') || !a.child.joint || this.launchers.some((l) => l.act === a)) continue;
       const kind = a.def.type === 'motor' && a.def.input.mode === 'toggle' ? 'spinner' : a.def.type;
       if (!out.has(a.def.input.source)) out.set(a.def.input.source, new Set());
       out.get(a.def.input.source)!.add(kind);
@@ -489,6 +791,8 @@ export class Robot {
       fl.on = want && this.powered && fl.fuel > 0 && !fl.part.failed && !fl.part.detached;
       if (fl.on) fl.fuel = Math.max(0, fl.fuel - 0.06 * dt);
     }
+    amps += this.updateLaunchers(c, voltage, dt);
+    this.clock += dt;
     for (const t of this.tankParts) if (t.condition < 0.5 && this.gasLeft > 0) this.gasLeft = Math.max(0, this.gasLeft - 40 * (1 - t.condition / 0.5) * dt);
     // The battery can only give so much; beyond that the voltage sags.
     this.current = Math.min(amps, this.battery.maxCurrent);

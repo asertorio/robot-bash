@@ -9,6 +9,10 @@ import { buildPartMesh } from './partMesh';
 import { setWear } from './surfaces';
 
 /** Three.js mirror of a Match. Reads simulation state; never writes it. */
+/** Cables drawn at once, and line segments per cable. */
+const CABLE_MAX = 8;
+const CABLE_SEGS = 10;
+
 export class MatchView {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
@@ -24,6 +28,9 @@ export class MatchView {
   private floorFlipper!: THREE.Group;
   private flameLight!: THREE.PointLight;
   private flames: THREE.Points;
+  /** Harpoon cables: a few line segments each, sagging when slack. */
+  private cableLines: THREE.LineSegments;
+  private cablePositions = new Float32Array(CABLE_MAX * CABLE_SEGS * 2 * 3);
   private flameData: Array<{ p: THREE.Vector3; v: THREE.Vector3; life: number }> = [];
   private flamePositions = new Float32Array(400 * 3);
   private camTarget = new THREE.Vector3(0, 0, 0);
@@ -75,6 +82,11 @@ export class MatchView {
     this.flames = new THREE.Points(fg, new THREE.PointsMaterial({ size: 0.22, color: 0xff7a1a, transparent: true, opacity: 0.75, depthWrite: false, blending: THREE.AdditiveBlending }));
     this.flames.frustumCulled = false;
     this.scene.add(this.flames);
+    const cg = new THREE.BufferGeometry();
+    cg.setAttribute('position', new THREE.BufferAttribute(this.cablePositions, 3));
+    this.cableLines = new THREE.LineSegments(cg, new THREE.LineBasicMaterial({ color: 0xb8bec4 }));
+    this.cableLines.frustumCulled = false;
+    this.scene.add(this.cableLines);
     this.resize();
     window.addEventListener('resize', () => this.resize());
     this.bindOrbit(canvas);
@@ -445,6 +457,7 @@ export class MatchView {
       const fq = m.arena.floorFlipper.rotation();
       this.floorFlipper.quaternion.set(fq.x, fq.y, fq.z, fq.w);
       this.syncFlames(m, dt);
+      this.syncCables(m);
       this.updateCamera(m, dt);
       this.applyShake(dt);
       this.placeGizmo();
@@ -457,7 +470,8 @@ export class MatchView {
     for (const pm of this.partMeshes) {
       const { part, mesh, mats } = pm;
       const b = part.body, v = part.visual;
-      if (!b || !v || !part.collider) { mesh.visible = false; continue; }
+      // Spare rounds wait in the magazine on disabled bodies: not drawn till loaded.
+      if (!b || !v || !part.collider || !b.isEnabled()) { mesh.visible = false; continue; }
       mesh.visible = true;
       // Body pose × the part's pose on that body.
       const bp = b.translation(), bq = b.rotation();
@@ -517,6 +531,35 @@ export class MatchView {
     g.setDrawRange(0, this.sparkData.length);
     g.attributes.position.needsUpdate = true;
     g.attributes.color.needsUpdate = true;
+  }
+
+  /**
+   * Cables from launchers to their rounds. A taut one is straight; a slack
+   * one hangs in a rough parabola, sagging with however much is paid out
+   * beyond the straight-line distance.
+   */
+  private syncCables(m: Match) {
+    const pos = this.cablePositions;
+    let n = 0;
+    for (const r of m.robots) {
+      for (const c of r.cables()) {
+        if (n >= CABLE_MAX) break;
+        const d = Math.hypot(c.to.x - c.from.x, c.to.y - c.from.y, c.to.z - c.from.z);
+        const sag = c.taut ? 0 : Math.min(0.4, 0.15 * d);
+        for (let k = 0; k < CABLE_SEGS; k++) {
+          for (const [j, t] of [[0, k / CABLE_SEGS], [1, (k + 1) / CABLE_SEGS]] as const) {
+            const o = ((n * CABLE_SEGS + k) * 2 + j) * 3;
+            pos[o] = c.from.x + (c.to.x - c.from.x) * t;
+            pos[o + 1] = Math.max(0.005, c.from.y + (c.to.y - c.from.y) * t - 4 * sag * t * (1 - t));
+            pos[o + 2] = c.from.z + (c.to.z - c.from.z) * t;
+          }
+        }
+        n++;
+      }
+    }
+    const g = this.cableLines.geometry;
+    g.setDrawRange(0, n * CABLE_SEGS * 2);
+    g.attributes.position.needsUpdate = true;
   }
 
   private syncFlames(m: Match, dt: number) {

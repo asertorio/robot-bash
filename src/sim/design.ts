@@ -132,6 +132,36 @@ export interface ChainDef {
   speed: number;
 }
 
+/**
+ * A launcher: the part on the end of a gas-ram slider leaves the barrel at
+ * the end of the ram's stroke, with whatever speed the gas gave it. Muzzle
+ * speed, recoil and gas used all come from the ram — there's no separate
+ * "gun". The round is this part plus anything bolted (fixed) to it.
+ */
+export interface LaunchDef {
+  /** Spare rounds in the magazine (copies of the round), loaded one at a time. 0 / absent = one shot. */
+  rounds?: number;
+  /** Seconds to load the next round. */
+  reload?: number;
+  /** A steel cable ties the round to the robot: a harpoon. */
+  tether?: TetherDef;
+}
+
+export interface TetherDef {
+  /** Cable length, m. */
+  length: number;
+  /** A motor-driven drum to reel the cable in (the input's −1 pays it out). */
+  winch?: WinchDef;
+}
+
+export interface WinchDef {
+  motor: string;
+  gear: number;
+  /** Drum radius, mm. */
+  drum: number;
+  input: InputDef;
+}
+
 export interface PartDef {
   id: string;
   label: string;
@@ -159,6 +189,8 @@ export interface PartDef {
   edge?: EdgeKind;
   /** Structure with a 'saw' edge: a driven chain running round it. */
   chain?: ChainDef;
+  /** Fired off the end of its gas-ram slider (a cannon round or a harpoon). */
+  launch?: LaunchDef;
 }
 
 /** Builder-defined catalogue parts, referenced by id like any other. */

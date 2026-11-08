@@ -132,6 +132,10 @@ export class TouchControls {
 export function buttonLabel(kinds: Set<string> | undefined, flame: boolean): string | null {
   if (flame) return 'Flame';
   if (!kinds?.size) return null;
+  if (kinds.has('cut')) return 'Cut';
+  if (kinds.has('harpoon')) return 'Harpoon';
+  if (kinds.has('cannon')) return 'Shoot';
+  if (kinds.has('winch')) return 'Winch';
   if (kinds.has('spinner')) return 'Spin';
   if (kinds.has('chain')) return 'Saw';
   if (kinds.has('pneumatic')) return 'Fire';

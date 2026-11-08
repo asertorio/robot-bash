@@ -125,7 +125,9 @@ from the design alone, so player-built robots get the same treatment:
   chamfered like cut and deburred plate, and hollow shells get button-head
   bolts along every panel edge, about every 100 mm. Wheels get a treaded
   tyre, a spoked rim, a hub and axle nuts. Batteries, gas bottles, ballast
-  and flamethrowers look like the real items. The chassis' top deck carries
+  and flamethrowers look like the real items. Harpoon cables are drawn from
+  muzzle to harpoon, straight when taut and sagging when slack; spare rounds
+  aren't drawn until they're loaded. The chassis' top deck carries
   the robot's name.
 - `surfaces.ts`: per-material finishes (brushed aluminium, ground hardened
   steel, matt HDPE, clear polycarbonate, wood grain…) with paint over them.
@@ -214,6 +216,45 @@ gravity. Gas is finite: run out and the flipper is dead weight.
 no gas, draws `pumpCurrent` from the battery while it works, and is paired
 with the flow-limited `spool` valve, so it is slow and very strong — a
 crusher that can bite as often as it likes.
+
+### Launchers: cannon and harpoon
+
+A part on a pneumatic-ram slider can carry `launch` (`LaunchDef`): at the end
+of the ram's stroke the slider joint is removed and the round — that part and
+anything bolted to it — flies on with whatever speed the gas gave it. There is
+no separate gun model: muzzle speed is the ram's work over the round's mass,
+
+```
+v_muzzle ≤ √(2 × P × A_bore × stroke / m_round)
+```
+
+less what the valve's opening time costs (the dump valve gets ~65–70% of
+it), and the ram's reaction is the recoil. The round is let go the step
+before it would reach the slider's end stop, or the stop would catch it.
+Heavier rounds go slower but carry more momentum for the same gas, and
+momentum is what shoves. Gas per shot is the ram's, as for a flipper.
+
+- **Cannon** (no tether): `rounds` spares are built with the robot as copies
+  of the round, parked on disabled bodies, their mass carried on the
+  launcher's mount (one internal part that can be damaged; wrecked, it can't
+  reload). One loads `reload` s (default 1.5) after each shot. A free round
+  passes through its own robot for 0.6 s, then is ordinary debris.
+  **Banned in the weight classes** (free-flying projectiles): Open only.
+- **Harpoon** (`tether`): the round stays on a steel cable (a Rapier rope
+  joint from the muzzle, 0.1 kg/m). The drum free-spools, so cable pays out as
+  far as the round flies. A `spike`-edged round sticks (a fixed joint where it
+  hit) when its impact force beats the plate's pierce force
+  (`pierceForce`, ∝ yield strength × thickness): a 1.1 kg harpoon at ~33 m/s
+  goes into 8 mm aluminium (10 kN against 5.2 kN) and glances off a 5 mm
+  Hardox wedge (6.8 kN against 15.6 kN). Fire again to cut the cable.
+- **Winch** (`tether.winch`): a DC motor and gearbox on a drum. Taut, it pulls
+  with `torque × gear × η ÷ r_drum` at the speed the load allows (the normal
+  motor model), on *both* ends — a light robot reels itself to a heavy one,
+  and dragging a braked robot needs more grip than it has. Slack, it winds in
+  at free speed. A round reeled back to within 0.3 m of the muzzle, not stuck
+  in anything, drops back into the barrel ready to fire again.
+
+Tuning lives in `LAUNCH` (`src/sim/launch.ts`).
 
 ### Spinner
 
@@ -308,6 +349,8 @@ and full report → off.
 100 kg), optional budget (£1,500 / £3,000 / £5,000), a 1.5 m × 1.5 m size
 limit, armour clear of the floor, wheels on both sides, motor voltage vs.
 battery (over 1.6× is rejected), and spinner blades clear of the floor.
+Free-flying projectiles (a launcher without a cable) are Open class only, as
+flamethrowers are; a harpoon on a cable is allowed everywhere.
 Warnings cover a battery that won't last 3 minutes, battery-limited pushing,
 flipper plates that can't reach the floor, and very high ground clearance.
 
@@ -369,7 +412,10 @@ into them: a lifter what's already on it, a crusher whatever it comes down
 on),
 and the button is held for the whole stroke (0.5 s for a dump-valve flipper,
 1.6 s for a slow lifter). Slow lifters only fire with the target resting on
-top of them. Flamethrowers fire when the target is in the cone. House robots
+top of them. Flamethrowers fire when the target is in the cone. Cannons and
+harpoons fire when a target is within 0.22 m (+2 cm per metre) of the barrel's
+line and in range (6 m for a cannon, 85% of the cable for a harpoon); the
+winch is wound whenever a harpoon is out and has stopped flying. House robots
 use the same operator.
 
 ## Controls
@@ -450,6 +496,9 @@ use the same operator.
    house-only 48 V parts: a 1.3 m full-body spinner, a 125 kN hydraulic spike,
    a hydraulic clamp-lifter and a flame-throwing 60-bar flipper. Classic,
    overpowered or mixed is chosen on the select screen or in Settings.
+   **v0.8:** launchers — a gas cannon (Open class) and a harpoon gun with a
+   winch, fired off the end of a ram so the physics sets muzzle speed and
+   recoil.
    *Later:* wall spikes/grinders, house-robot weapons beyond lifters and
    spinners (crusher, flame thrower), and the pit being usable by house robots
    to finish victims.

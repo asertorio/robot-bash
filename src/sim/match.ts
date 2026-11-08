@@ -5,7 +5,8 @@ import { NEUTRAL, type ControlState } from './control';
 import type { RobotDesign } from './design';
 import { HOUSE_CORNERS, HouseDriver, zoneCentre } from './house';
 import { CUT, PIERCE, cutRatio, hitShare, pierceForce } from './damage';
-import { Robot, type Part } from './robot';
+import { LAUNCH } from './launch';
+import { Robot, type Part, type Round } from './robot';
 import { qrotate, vadd, vcross, vdot, vlen, vscale, vsub, type V3 } from './vmath';
 
 export const STEP = 1 / 480;
@@ -221,6 +222,12 @@ export class Match {
 
     this.world.step(this.events);
     this.processContacts(snapshot);
+    for (const { robot, round, body, victim } of this.embeds) {
+      if (round.embed) continue;
+      robot.embed(round, body);
+      if (this.phase !== 'countdown') this.say(`${robot.design.name} has harpooned ${victim.design.name}!`, 'major');
+    }
+    this.embeds.length = 0;
 
     for (const r of this.robots) {
       const shaken = r.measureShock(STEP);
@@ -290,6 +297,14 @@ export class Match {
         const force = e.totalForceMagnitude();
         this.wear(owner1, owner2, force, slide, point);
         this.wear(owner2, owner1, force, slide, point);
+      }
+      // A pointed round hitting hard enough to pierce the plate sticks in.
+      for (const [att, def, col] of [[owner1, owner2, c2], [owner2, owner1, c1]] as const) {
+        if (!att || !def || att.robot === def.robot || att.part.edge !== 'spike' || def.part.kind !== 'structure' || def.part.detached) continue;
+        const round = att.robot.roundOf(att.part);
+        const body = col.parent();
+        if (!round || round.embed || !body) continue;
+        if (e.totalForceMagnitude() > LAUNCH.EMBED * pierceForce(def.part.material, def.part.thickness)) this.embeds.push({ robot: att.robot, round, body, victim: def.robot });
       }
       const energy = 0.5 * impulse * closing;
       if (energy < 1) return;
@@ -599,6 +614,9 @@ export class Match {
   }
 
   /** Is competitor `i` touching another competitor, and is it touching a house robot? */
+  /** Pointed rounds that went in this step, stuck in once the contacts are read. */
+  private embeds: Array<{ robot: Robot; round: Round; body: RAPIER.RigidBody; victim: Robot }> = [];
+
   private contacts(i: number): { opponent: boolean; house: boolean; touching: Robot | null } {
     const mine = this.robotColliders[i];
     const out = { opponent: false, house: false, touching: null as Robot | null };
@@ -610,7 +628,8 @@ export class Match {
         if (!c) continue;
         this.world.contactPairsWith(c, (other) => {
           if (mine.has(other.handle)) return;
-          const j = this.robots.findIndex((r, k) => k !== i && r.partFor(other));
+          // Loose bits (shed armour, spent rounds) aren't anyone driving into you.
+          const j = this.robots.findIndex((r, k) => k !== i && r.partFor(other) && !r.partFor(other)!.detached);
           if (j < 0) return;
           const kind = j < this.competitors.length ? 'opponent' : 'house';
           if (out[kind]) return;

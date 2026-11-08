@@ -2,7 +2,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { loadDesigns } from './data/garage';
 import { HOUSE_ROBOTS, MONSTER_HOUSE, houseLineup, type HouseSet } from './data/house';
 import { damageScale, loadSettings, saveSettings, type Settings } from './data/settings';
-import { CRASH_TEST_DUMMY, TEMPLATES } from './data/templates';
+import { CRASH_TEST_DUMMY, TEMPLATES, OPEN_CLASS } from './data/templates';
 import { describeBinding, loadProfiles, saveProfiles, type ControlProfile } from './input/bindings';
 import { InputManager } from './input/input';
 import { MatchView } from './render/view';
@@ -296,7 +296,7 @@ class App {
   private selectScreen() {
     this.input.mode = 'menu';
     const saved = loadDesigns();
-    this.roster = [...TEMPLATES, ...this.allHouse, ...saved];
+    this.roster = [...TEMPLATES, ...OPEN_CLASS, ...this.allHouse, ...saved];
     this.pickIds = [0, 1].map((p) => this.pick(p).id);
     const n = () => this.roster.length;
     const step = (p: number, d: number) => {
@@ -338,6 +338,7 @@ class App {
           h('dl', { class: 'stats' }, ...statLines(stats).flatMap(([k, v, bad]) => [h('dt', {}, k), h('dd', { class: bad ? 'over' : '' }, v)])),
           house
             ? h('div', { class: 'legal' }, 'Built to house-robot rules, not the competition\'s: far over the heavyweight limit.')
+            : OPEN_CLASS.includes(design) ? h('div', { class: 'legal' }, 'Open class: its weapon is banned in the weight classes, but anything goes here.')
             : !isLegal(issues) && h('div', { class: 'legal bad' }, `Fails heavyweight scrutineering: ${issues.find((i) => i.level === 'error')!.text}`),
           h('div', { class: 'keys-hint' }, kl && kr ? `${describeBinding(kl)} / ${describeBinding(kr)} to change robot` : 'Use ◀ ▶ to change robot', ` · pad ${p + 1} D-pad`),
           h('button', { class: 'small', style: 'margin-top:8px', onclick: () => this.garageScreen(design, () => this.selectScreen()) }, mine ? 'Edit in garage' : 'Open a copy in the garage'));

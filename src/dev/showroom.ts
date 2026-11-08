@@ -1,6 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { HOUSE_ROBOTS } from '../data/house';
-import { CRASH_TEST_DUMMY, TEMPLATES } from '../data/templates';
+import { CRASH_TEST_DUMMY, OPEN_CLASS, TEMPLATES } from '../data/templates';
 import { MatchView } from '../render/view';
 import { Match } from '../sim/match';
 
@@ -12,7 +12,7 @@ const q = new URLSearchParams(location.search);
 const num = (k: string, d: number) => (q.has(k) ? Number(q.get(k)) : d);
 
 RAPIER.init().then(() => {
-  const all = [...TEMPLATES, ...HOUSE_ROBOTS, CRASH_TEST_DUMMY];
+  const all = [...TEMPLATES, ...OPEN_CLASS, ...HOUSE_ROBOTS, CRASH_TEST_DUMMY];
   const design = all.find((d) => d.id === q.get('robot')) ?? all[0];
   const view = new MatchView(document.getElementById('view') as HTMLCanvasElement);
   const match = new Match([design], { sandbox: true, skipCountdown: true, spawns: [{ pos: { x: 0, y: 0.01, z: 0 }, yaw: num('heading', 0) }] });

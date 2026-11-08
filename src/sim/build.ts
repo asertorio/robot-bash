@@ -25,7 +25,8 @@ export type NewPartKind =
   | 'box' | 'armour' | 'wedge' | 'cylinder' | 'cone' | 'sphere' | 'capsule' | 'plate' | 'bar'
   | 'wheel' | 'battery' | 'gasTank' | 'ballast'
   | 'flipper' | 'spinner' | 'lifter' | 'axe' | 'spike' | 'leg'
-  | 'outline' | 'lathe' | 'model' | 'flail' | 'flamethrower' | 'suspensionWheel' | 'crusher' | 'hydraulicCrusher' | 'chainsaw';
+  | 'outline' | 'lathe' | 'model' | 'flail' | 'flamethrower' | 'suspensionWheel' | 'crusher' | 'hydraulicCrusher' | 'chainsaw'
+  | 'harpoon' | 'cannon';
 
 export const NEW_PART_KINDS: Array<[NewPartKind, string, string]> = [
   ['outline', 'Drawn outline — any 2D shape, extruded', 'Shapes'], ['lathe', 'Drawn profile — spun into a drum, dome…', 'Shapes'], ['model', 'Imported 3D model (STL / OBJ)', 'Shapes'],
@@ -34,6 +35,7 @@ export const NEW_PART_KINDS: Array<[NewPartKind, string, string]> = [
   ['wheel', 'Driven wheel', 'Drive'], ['suspensionWheel', 'Driven wheel on sprung suspension', 'Drive'], ['leg', 'Walking leg (hip + knee servos)', 'Drive'],
   ['flipper', 'Flipper (ram on a hinge)', 'Weapons'], ['lifter', 'Lifter (slow ram)', 'Weapons'], ['axe', 'Axe / hammer (ram)', 'Weapons'],
   ['spinner', 'Spinner (motor on a hinge)', 'Weapons'], ['spike', 'Ram spike (slider)', 'Weapons'],
+  ['harpoon', 'Harpoon gun (cable + winch)', 'Weapons'], ['cannon', 'Gas cannon (banned — Open class)', 'Weapons'],
   ['crusher', 'Crusher jaw (ram, pivots down)', 'Weapons'], ['hydraulicCrusher', 'Hydraulic crusher (pump-driven, no gas)', 'Weapons'], ['chainsaw', 'Chainsaw on a servo arm', 'Weapons'], ['flail', 'Flail (chain and ball)', 'Weapons'], ['flamethrower', 'Flamethrower (banned — Open class)', 'Weapons'],
   ['battery', 'Battery', 'Internals'], ['gasTank', 'Gas bottle', 'Internals'], ['ballast', 'Ballast weight', 'Internals'],
 ];
@@ -118,6 +120,20 @@ export function newParts(d: RobotDesign, kind: NewPartKind, parentId = root(d).i
       spike.edge = 'spike';
       spike.joint = { type: 'slider', axis: [0, 1, 0], limits: [0, 150], actuator: { type: 'pneumatic', ram: 'ram40', valve: 'dump', pressure: 20, leverArm: 0, input: btn(nextButton()) } };
       return [spike];
+    }
+    case 'harpoon': {
+      const n = nextButton();
+      const h = shapePart(d, parentId, 'Harpoon', { type: 'cone', radius: 0.02, length: 0.3 }, at.front, { rotation: [90, 0, 0], material: 'hardox' });
+      h.edge = 'spike';
+      h.joint = { type: 'slider', axis: [0, 1, 0], limits: [0, 200], actuator: { type: 'pneumatic', ram: 'ram63', valve: 'dump', pressure: 20, leverArm: 0, input: btn(n) } };
+      h.launch = { tether: { length: 6, winch: { motor: 'wm900', gear: 25, drum: 30, input: btn(n < 4 ? n + 1 : 1) } } };
+      return [h];
+    }
+    case 'cannon': {
+      const ball = shapePart(d, parentId, 'Cannonball', { type: 'sphere', radius: 0.04 }, at.front, { material: 'mildSteel' });
+      ball.joint = { type: 'slider', axis: [0, 0, 1], limits: [0, 200], actuator: { type: 'pneumatic', ram: 'ram63', valve: 'dump', pressure: 24, leverArm: 0, input: btn(nextButton()) } };
+      ball.launch = { rounds: 7, reload: 1.2 };
+      return [ball];
     }
     case 'spinner': {
       const blade = shapePart(d, parentId, 'Spinner blade', { type: 'box', size: [0.6, 0.015, 0.08] }, [at.top[0], round(at.top[1] + 0.03), at.top[2]], { material: 'hardox' });
