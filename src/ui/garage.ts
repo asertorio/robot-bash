@@ -648,6 +648,41 @@ export class Garage {
       if (j.type === 'hinge') out.push(this.mm('Lever arm', a.leverArm, (v) => (a.leverArm = v), 10, 500));
     }
     out.push(...this.inputFields(a));
+    if (j.type === 'slider' && a.type === 'pneumatic' && p.role === 'structure') out.push(...this.launchFields(p));
+    return out;
+  }
+
+  /** A ram slider can fire its part off the end: a cannon, or a harpoon on a cable. */
+  private launchFields(p: PartDef): HTMLElement[] {
+    const out: HTMLElement[] = [h('h4', {}, 'Launch')];
+    const l = p.launch;
+    const kind = !l ? 'none' : l.tether ? 'harpoon' : 'cannon';
+    out.push(this.sel('Fires it', [['none', 'No — it stays on the slider'], ['harpoon', 'Harpoon — on a steel cable'], ['cannon', 'Cannon — flies free (Open class only)']], kind, (v) => {
+      if (v === 'none') delete p.launch;
+      else if (v === 'harpoon') p.launch = { tether: { length: 6 } };
+      else p.launch = { rounds: 5, reload: 1.5 };
+    }, true));
+    if (!l) return out;
+    out.push(h('div', { class: 'hint' }, 'At the end of the ram\'s stroke this part (and anything bolted to it) leaves with whatever speed the gas gave it — a light round goes faster, a heavy one shoves harder. Pointed (spike-edged) rounds stick into plate they can pierce.'));
+    if (l.tether) {
+      const t = l.tether;
+      out.push(this.num('Cable length', t.length, (v) => (t.length = v), { min: 0.5, max: 15, step: 0.5, unit: 'm', floor: 0.5 }));
+      out.push(this.sel('Winch', [['none', 'None — the cable just ties you together'], ['winch', 'Motor winch']], t.winch ? 'winch' : 'none', (v) => {
+        if (v === 'none') delete t.winch;
+        else t.winch = { motor: 'wm900', gear: 25, drum: 30, input: { source: 'button2', mode: 'hold' } };
+      }, true));
+      if (t.winch) {
+        const w = t.winch;
+        out.push(...this.catalogSel('Winch motor', 'motors', w.motor, (v) => (w.motor = v), (m: MotorSpec) => `${m.name} — ${m.voltage} V, ${m.stallTorque} N·m, ${fmt(m.freeSpeed)} rpm, ${m.mass} kg`));
+        out.push(this.num('Gear reduction', w.gear, (v) => (w.gear = v), { min: 1, max: 200, step: 0.5, unit: ': 1', floor: 1 }));
+        out.push(this.num('Drum radius', w.drum, (v) => (w.drum = v), { min: 5, max: 200, step: 1, unit: 'mm', floor: 5 }));
+        out.push(h('div', { class: 'hint' }, 'Pull = motor torque × gear ÷ drum radius; speed the other way round. It pulls both ends: a lighter robot reels itself in. Reel in a miss and it drops back into the barrel; press fire again to cut the cable.'));
+        out.push(...this.inputFields({ type: 'motor', motor: w.motor, gear: w.gear, input: w.input }));
+      }
+    } else {
+      out.push(this.num('Spare rounds', l.rounds ?? 0, (v) => (l.rounds = Math.round(v)), { min: 0, max: 50, step: 1, floor: 0 }));
+      out.push(this.num('Reload time', l.reload ?? 1.5, (v) => (l.reload = v), { min: 0.2, max: 30, step: 0.1, unit: 's', floor: 0.2 }));
+    }
     return out;
   }
 

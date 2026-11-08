@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import { FLIPSIDE, TEMPLATES, WEDGEHOG, WHIRLWIND } from '../src/data/templates';
 import { ARENA } from '../src/sim/arena';
-import { Match } from '../src/sim/match';
+import { Match, drivingItself } from '../src/sim/match';
+import { qrotate } from '../src/sim/vmath';
 import { computeStats } from '../src/sim/stats';
 import { N, drive, run, spawnAt } from './helpers';
+import { HOUSE_ROBOTS } from '../src/data/house';
+import { pointToDrive } from '../src/input/input';
 
 describe('templates', () => {
   test.each(TEMPLATES.map((t) => [t.name, t]))('%s is a legal heavyweight whose sim mass matches its bill of materials', (_, d) => {
@@ -91,6 +94,55 @@ describe('rules', () => {
     run(m, 15, () => [drive(1), drive(0.6, -0.6)]);
     expect(m.eliminated[0]).toBe('immobilised');
     expect(m.result?.winner).toBe(1);
+    m.free();
+  });
+
+  test('driving away with a house robot on your tail stops the count', () => {
+    // At a count of 3 the house robots come for you. A robot that then drives
+    // off at full speed was still counted out, because nothing counted while
+    // a house robot was touching it.
+    for (const name of ['Twin Terror', 'Arachnid']) {
+      const d = TEMPLATES.find((t) => t.name === name)!;
+      const m = new Match([d, FLIPSIDE], { skipCountdown: true, house: HOUSE_ROBOTS });
+      run(m, 9, () => [N, drive(0.6, -0.6)]);
+      expect(m.counts[0]).toBeGreaterThan(4);
+      run(m, 6, (t) => [drive(1, t % 2 < 1 ? 0.6 : 1), drive(0.6, -0.6)]);
+      expect(m.eliminated[0]).toBeNull();
+      expect(m.counts[0]).toBeNull();
+      m.free();
+    }
+  });
+
+  test('with a house robot on you, only moving the way you drive counts', () => {
+    const m = new Match([WEDGEHOG, WEDGEHOG], { skipCountdown: true, sandbox: true });
+    const r = m.robots[0];
+    const fwd = qrotate(r.rotation, { x: 0, y: 0, z: 1 });
+    r.chassis.setLinvel({ x: fwd.x * 0.6, y: 0, z: fwd.z * 0.6 }, true);
+    expect(drivingItself(r, drive(1))).toBe(true);
+    // Shoved backwards (or sideways) while driving forwards: not your doing.
+    r.chassis.setLinvel({ x: -fwd.x * 0.6, y: 0, z: -fwd.z * 0.6 }, true);
+    expect(drivingItself(r, drive(1))).toBe(false);
+    r.chassis.setLinvel({ x: fwd.z * 0.6, y: 0, z: -fwd.x * 0.6 }, true);
+    expect(drivingItself(r, drive(1))).toBe(false);
+    // Spun the way you're steering counts; spun the other way doesn't.
+    r.chassis.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    r.chassis.setAngvel({ x: 0, y: -2, z: 0 }, true);
+    expect(drivingItself(r, drive(0.8, -0.8))).toBe(true);
+    expect(drivingItself(r, drive(-0.8, 0.8))).toBe(false);
+    m.free();
+  });
+
+  test('point to drive: push the stick right on screen and the robot ends up going right', () => {
+    const m = new Match([WEDGEHOG, WEDGEHOG], { skipCountdown: true, sandbox: true, spawns: spawnAt([0, -2, 0], [3, 3, 0]) });
+    const r = m.robots[0];
+    // Camera looking down −Z: screen right is world +X.
+    const stick = () => ({ ...N, ...pointToDrive(1, 0, { camera: { x: 0, z: -1 }, rotation: r.rotation, inverted: r.uprightness < 0 }) });
+    run(m, 1.5, () => [stick(), N]);
+    const a = r.position;
+    run(m, 0.5, () => [stick(), N]);
+    const b = r.position;
+    expect(b.x - a.x).toBeGreaterThan(0.5);
+    expect(Math.abs(b.z - a.z)).toBeLessThan(0.25 * (b.x - a.x));
     m.free();
   });
 

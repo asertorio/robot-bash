@@ -4,6 +4,7 @@ import { armour, bevelledPlate, bladeBar, cheekWedge, reshape, taperedTongue } f
 import { EXAMPLES } from './examples';
 import { ROSTER } from './roster';
 import { ARSENAL } from './arsenal';
+import { BOMBARD, WHALER } from './launchers';
 
 /**
  * Starter robots. Original designs in the style of classic heavyweights
@@ -134,7 +135,10 @@ export const WHIRLWIND: RobotDesign = reshape(fromV1({
   'spinner-0': { shape: bladeBar(0.62, 0.1, 0.025) },
 });
 
-export const TEMPLATES: RobotDesign[] = [WEDGEHOG, FLIPSIDE, WHIRLWIND, ...EXAMPLES, ...ROSTER, ...ARSENAL];
+export const TEMPLATES: RobotDesign[] = [WEDGEHOG, FLIPSIDE, WHIRLWIND, ...EXAMPLES, ...ROSTER, ...ARSENAL, WHALER];
+
+/** Built-in robots legal only in the Open class (banned weapons): fightable, but not heavyweights. */
+export const OPEN_CLASS: RobotDesign[] = [BOMBARD];
 
 /** Test-bay target: a heavy steel box that just sits there and takes it. */
 export const CRASH_TEST_DUMMY: RobotDesign = fromV1({

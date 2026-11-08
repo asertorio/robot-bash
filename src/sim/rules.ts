@@ -72,6 +72,8 @@ export function scrutineer(d: RobotDesign, rules: Rules = DEFAULT_RULES, stats?:
   const open = rules.weight.limit === Infinity;
   if (!open && (b.max.x - b.min.x > MAX_SIZE || b.max.z - b.min.z > MAX_SIZE)) err(`Too big: it must fit in ${MAX_SIZE} m × ${MAX_SIZE} m.`);
   if (!open && d.parts.some((p) => p.component?.type === 'flamethrower')) err('Flamethrowers are a banned weapon — only allowed in the Open class.');
+  // Real rules ban anything that flies free; a round on a cable is allowed.
+  if (!open && d.parts.some((p) => p.launch && !p.launch.tether)) err('Free-flying projectiles are banned — only allowed in the Open class. Tie it to a cable (a harpoon) to fight in a weight class.');
   if (b.min.y < -0.003) err(`Something is ${Math.round(-b.min.y * 1000)} mm below the floor — raise it.`);
   else if (b.min.y > 0.02) warn(`The lowest point is ${Math.round(b.min.y * 1000)} mm up: it will drop onto the floor when placed.`);
   const frames = partFrames(d);

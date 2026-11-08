@@ -7,7 +7,13 @@ import { h } from './dom';
 import { PLAYER_COLOURS } from './hud';
 
 /** The controls editor: remap anything, pick arcade/tank mixing, write macros. */
-export function controlsScreen(profiles: ControlProfile[], input: InputManager, save: (p: ControlProfile[]) => void, back: () => void): HTMLElement {
+/** The on-screen stick's mode (phones and tablets), kept with the game settings. */
+export interface StickChoice {
+  value: 'point' | 'robot';
+  set: (v: 'point' | 'robot') => void;
+}
+
+export function controlsScreen(profiles: ControlProfile[], input: InputManager, save: (p: ControlProfile[]) => void, back: () => void, stick?: StickChoice): HTMLElement {
   const root = h('div', { class: 'screen top' });
   let listening: string | null = null;
 
@@ -107,6 +113,13 @@ export function controlsScreen(profiles: ControlProfile[], input: InputManager, 
     root.replaceChildren(
       h('h2', {}, 'Controls'),
       h('div', { class: 'controls-grid' }, ...profiles.map((p, i) => card(p, i))),
+      stick ? h('div', { class: 'setting' },
+        h('div', { class: 'slabel' }, 'Touch stick (phones and tablets)'),
+        h('span', { class: 'seg' }, ...([['point', 'Point to drive'], ['robot', 'Robot\'s view']] as const).map(([v, text]) =>
+          h('button', { class: stick.value === v ? 'on' : '', onclick: () => { stick.set(v); stick.value = v; render(); } }, text))),
+        h('div', { class: 'hint' }, stick.value === 'point'
+          ? 'Push the stick the way you want to go on screen: the robot turns and drives that way.'
+          : 'The classic RC mix: up is the robot\'s forward, sideways steers — so when it faces you, left and right swap.')) : '',
       h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: () => { input.cancelCapture(); back(); } }, 'Done')),
       h('div', { class: 'footnote' }, 'Gamepads: press any button on a pad to wake it up. Pad 1 is player 1, pad 2 is player 2 by default. Changes save automatically in this browser.'));
   }

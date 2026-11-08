@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { defaultProfile, parseMacro, type Binding } from '../src/input/bindings';
-import { MacroRunner, keyLevel, mixControls, withTouch } from '../src/input/input';
+import { MacroRunner, keyLevel, mixControls, pointToDrive, withTouch } from '../src/input/input';
+import { qaxis } from '../src/sim/vmath';
 import { dcMotor } from '../src/sim/motor';
 import { MOTORS } from '../src/data/parts';
 
@@ -36,14 +37,37 @@ describe('mixing', () => {
   test('the touch stick drives like an arcade stick, and adds to the keys', () => {
     const p = defaultProfile(0);
     const none = mixControls(p, keys(), new Set());
-    const up = withTouch(none, { x: 0, y: -1, buttons: [false, false, false, false] }, p);
+    const up = withTouch(none, { x: 0, y: -1, rx: 0, ry: -1, buttons: [false, false, false, false] }, p);
     expect(up).toMatchObject({ left: 1, right: 1 });
-    const right = withTouch(none, { x: 1, y: 0, buttons: [false, false, false, false] }, p);
+    const right = withTouch(none, { x: 1, y: 0, rx: 1, ry: 0, buttons: [false, false, false, false] }, p);
     expect(right.left).toBeGreaterThan(0);
     expect(right.right).toBeLessThan(0);
     // Stick centred: the keyboard still drives; a touch button fires.
-    const keysOnly = withTouch(mixControls(p, keys('KeyW'), new Set()), { x: 0, y: 0, buttons: [true, false, false, false] }, p);
+    const keysOnly = withTouch(mixControls(p, keys('KeyW'), new Set()), { x: 0, y: 0, rx: 0, ry: 0, buttons: [true, false, false, false] }, p);
     expect(keysOnly).toMatchObject({ left: 1, right: 1, weapon: true });
+  });
+
+  test('point to drive: the robot goes the way the stick points on screen', () => {
+    // Camera looking down −Z, so screen up is −Z and screen right is +X.
+    const cam = { x: 0, z: -1 };
+    const facing = (yaw: number) => ({ camera: cam, rotation: qaxis({ x: 0, y: 1, z: 0 }, yaw), inverted: false });
+    // Facing up the screen (+Z rotated by π is −Z): stick up is straight ahead.
+    const ahead = pointToDrive(0, -1, facing(Math.PI));
+    expect(ahead.left).toBeCloseTo(1);
+    expect(ahead.right).toBeCloseTo(1);
+    // Facing down the screen (towards the camera): stick down is straight ahead too.
+    const down = pointToDrive(0, 1, facing(0));
+    expect(down.left).toBeCloseTo(1);
+    expect(down.right).toBeCloseTo(1);
+    // Facing down the screen, stick up: pivot on the spot, no driving off backwards first.
+    const about = pointToDrive(0, -1, facing(0));
+    expect(about.left + about.right).toBeCloseTo(0);
+    // Facing up the screen, stick right: turn right (left side faster).
+    const r = pointToDrive(1, 0, facing(Math.PI));
+    expect(r.left).toBeGreaterThan(r.right);
+    // Upside down the same push needs the drive reversed.
+    const inv = pointToDrive(0, -1, { ...facing(Math.PI), inverted: true });
+    expect(inv.left).toBeLessThan(0);
   });
 
   test('player 2 defaults do not overlap player 1', () => {

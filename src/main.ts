@@ -2,7 +2,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { loadDesigns } from './data/garage';
 import { HOUSE_ROBOTS, MONSTER_HOUSE, houseLineup, type HouseSet } from './data/house';
 import { damageScale, loadSettings, saveSettings, type Settings } from './data/settings';
-import { CRASH_TEST_DUMMY, TEMPLATES } from './data/templates';
+import { CRASH_TEST_DUMMY, TEMPLATES, OPEN_CLASS } from './data/templates';
 import { describeBinding, loadProfiles, saveProfiles, type ControlProfile } from './input/bindings';
 import { InputManager } from './input/input';
 import { MatchView } from './render/view';
@@ -94,6 +94,9 @@ class App {
     this.touch.show(player !== null);
     this.input.touch = player !== null ? this.touch.state : null;
     this.input.touchPlayer = player ?? 0;
+    this.input.touchPose = robot && this.settings.stick === 'point'
+      ? { camera: this.view.groundForward(), rotation: robot.rotation, inverted: robot.uprightness < 0 }
+      : null;
     if (robot) {
       const uses = robot.buttonUses();
       this.touch.setButtons([1, 2, 3, 4].map((n) => buttonLabel(uses.get(`button${n}`), robot!.flames.some((f) => f.def.input.source === `button${n}`))));
@@ -255,7 +258,7 @@ class App {
         h('button', { onclick: () => this.controlsScreen() }, 'Controls'),
         h('button', { onclick: () => this.settingsScreen() }, 'Settings'),
         h('button', { onclick: () => this.howToScreen() }, 'How to play')),
-      (touchOnly || this.touchSeen) && h('div', { class: 'touch-note' }, 'On a phone or tablet: turn it sideways, steer with the stick bottom left and fire with the buttons bottom right. In the garage, tap Hide panels to test-drive.'),
+      (touchOnly || this.touchSeen) && h('div', { class: 'touch-note' }, 'On a phone or tablet: turn it sideways, push the stick bottom left the way you want to go on screen and fire with the buttons bottom right. In the garage, tap Hide panels to test-drive.'),
       h('div', { class: 'hazard-bar' }),
       h('div', { class: 'footnote' }, 'A physics-simulated robot combat game in the spirit of the classic British TV show. Every hit is worked out from real forces — no hit points.')));
   }
@@ -293,7 +296,7 @@ class App {
   private selectScreen() {
     this.input.mode = 'menu';
     const saved = loadDesigns();
-    this.roster = [...TEMPLATES, ...this.allHouse, ...saved];
+    this.roster = [...TEMPLATES, ...OPEN_CLASS, ...this.allHouse, ...saved];
     this.pickIds = [0, 1].map((p) => this.pick(p).id);
     const n = () => this.roster.length;
     const step = (p: number, d: number) => {
@@ -335,6 +338,7 @@ class App {
           h('dl', { class: 'stats' }, ...statLines(stats).flatMap(([k, v, bad]) => [h('dt', {}, k), h('dd', { class: bad ? 'over' : '' }, v)])),
           house
             ? h('div', { class: 'legal' }, 'Built to house-robot rules, not the competition\'s: far over the heavyweight limit.')
+            : OPEN_CLASS.includes(design) ? h('div', { class: 'legal' }, 'Open class: its weapon is banned in the weight classes, but anything goes here.')
             : !isLegal(issues) && h('div', { class: 'legal bad' }, `Fails heavyweight scrutineering: ${issues.find((i) => i.level === 'error')!.text}`),
           h('div', { class: 'keys-hint' }, kl && kr ? `${describeBinding(kl)} / ${describeBinding(kr)} to change robot` : 'Use ◀ ▶ to change robot', ` · pad ${p + 1} D-pad`),
           h('button', { class: 'small', style: 'margin-top:8px', onclick: () => this.garageScreen(design, () => this.selectScreen()) }, mine ? 'Edit in garage' : 'Open a copy in the garage'));
@@ -386,7 +390,8 @@ class App {
         row('Referee breaks', 'breaks', onOff, 'Two robots shoving nose to nose and going nowhere for 5 seconds get pulled apart by the referee.'),
         row('House robots', 'houseSet', [['classic', 'Classic'], ['overpowered', 'Overpowered'], ['mixed', 'Mixed']], 'Overpowered: a 1.3 m full-body spinner, a 125 kN hydraulic spike, a giant clamp-lifter and a flame-throwing flipper.'),
         row('Slow motion', 'slowMotion', onOff, 'Time slows for a moment after a really big hit.'),
-        row('Camera shake', 'shake', onOff, 'The camera shakes on big hits.')),
+        row('Camera shake', 'shake', onOff, 'The camera shakes on big hits.'),
+        row('Touch stick', 'stick', [['point', 'Point to drive'], ['robot', 'Robot\'s view']], 'Phones and tablets. Point to drive: the robot goes the way you push the stick on screen. Robot\'s view: up is the robot\'s forward and sideways steers, like an RC transmitter.')),
       h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: () => this.mainMenu() }, 'Back'))));
     render();
   }
@@ -398,7 +403,7 @@ class App {
     mount(this.ui, controlsScreen(this.profiles, this.input, (p) => {
       saveProfiles(p);
       this.input.setProfiles(p);
-    }, () => this.mainMenu()));
+    }, () => this.mainMenu(), { value: this.settings.stick, set: (v) => { this.settings.stick = v; saveSettings(this.settings); } }));
   }
 
   private howToScreen() {
@@ -420,7 +425,7 @@ class App {
           h('li', {}, 'Gamepads: left stick drives, A / RT weapon 1, B / LT weapon 2, X and Y weapons 3 and 4, Start pauses. In menus the D-pad moves, A picks, B goes back.'),
           h('li', {}, kb('Esc'), ' pauses (or the Pause button) · ', kb('Tab'), ' cycles the damage display: health diagrams, full report, off'),
           h('li', {}, 'Everything can be remapped under Controls, including tank-style steering.'),
-          h('li', {}, 'Phone or tablet: turn it sideways. The stick bottom left drives, the buttons bottom right fire (labelled with what they do). Tap the damage label at the top to cycle the display. In the garage, Hide panels to test-drive; pinch to zoom.')),
+          h('li', {}, 'Phone or tablet: turn it sideways. Push the stick bottom left the way you want to go on screen — the robot turns and drives that way (Settings → Touch stick switches to the robot\'s-view RC mix). The buttons bottom right fire (labelled with what they do). Tap the damage label at the top to cycle the display. In the garage, Hide panels to test-drive; pinch to zoom.')),
         h('h3', {}, 'Driving'),
         h('ul', {},
           h('li', {}, 'Drive keys build up to full power over a quarter of a second: tap for a small nudge, hold to charge. Let go and the motors brake.'),

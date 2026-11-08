@@ -69,7 +69,7 @@ export class RobotDiagram {
 
   /** Worst-off parts, for a line of text under the picture. */
   static worst(r: Robot, n = 3): string {
-    const hurt = r.parts.filter((p) => p.condition < 0.97 || p.detached).sort((a, b) => a.condition - b.condition).slice(0, n);
+    const hurt = r.parts.filter((p) => (p.condition < 0.97 || p.detached) && !r.isAmmo(p)).sort((a, b) => a.condition - b.condition).slice(0, n);
     return hurt.map((p) => `${p.label}: ${p.detached && p.condition > 0 ? 'Detached' : conditionLabel(p.condition)}`).join(' · ');
   }
 
@@ -80,6 +80,7 @@ export class RobotDiagram {
     const origin = frames.get(root(d).id)!.pos;
     const prints: Footprint[] = [];
     for (const p of r.parts) {
+      if (r.isAmmo(p)) continue;
       if (p.def) {
         const f = frames.get(p.id);
         if (!f) continue;

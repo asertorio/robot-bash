@@ -70,6 +70,18 @@ export function treeErrors(d: RobotDesign): string[] {
     if (p.role === 'component' && !p.component) errs.push(`${p.label} is an empty component.`);
     if (p.joint.type === 'slider' && p.joint.actuator?.type === 'motor') errs.push(`${p.label}: a DC motor can't drive a slider — use a ram or servo.`);
     if (p.role === 'wheel' && p.joint.type !== 'hinge') errs.push(`${p.label}: wheels need a hinge joint (their axle).`);
+    if (p.launch) {
+      const l = p.launch;
+      if (p.role !== 'structure' || p.joint.type !== 'slider' || p.joint.actuator?.type !== 'pneumatic') errs.push(`${p.label}: a launched round sits on a slider driven by a pneumatic ram.`);
+      else if (childrenOf(d, p.id).some((c) => c.joint.type !== 'fixed')) errs.push(`${p.label}: a round can only have parts bolted to it, not jointed ones.`);
+      if (l.rounds !== undefined && !(Number.isInteger(l.rounds) && l.rounds >= 0 && l.rounds <= 50)) errs.push(`${p.label}: spare rounds must be a whole number from 0 to 50.`);
+      if (l.reload !== undefined && !(l.reload >= 0.2 && l.reload <= 30)) errs.push(`${p.label}: reload time must be 0.2–30 s.`);
+      if (l.tether) {
+        if (!(l.tether.length >= 0.5 && l.tether.length <= 15)) errs.push(`${p.label}: the cable must be 0.5–15 m long.`);
+        const w = l.tether.winch;
+        if (w && (!(w.gear >= 1) || !(w.drum >= 5 && w.drum <= 200) || !w.input || typeof w.input.source !== 'string')) errs.push(`${p.label}: the winch needs a gear ratio, a 5–200 mm drum and a control.`);
+      }
+    }
   }
   return errs;
 }

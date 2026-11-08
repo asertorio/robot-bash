@@ -21,6 +21,7 @@ built (tests do it in `tests/helpers.ts`, the app in `main.ts`).
 | `match.ts` | `Match`: fixed 480 Hz step, count, pit, hazards, judges, commentary |
 | `arena.ts`, `house.ts` | Arena geometry/hazards, house robots and their CPZs |
 | `ai.ts` | `CpuDriver` and generic `WeaponOperator` |
+| `launch.ts` | `LAUNCH` constants and mass helpers for cannons and harpoons (runtime in `robot.ts`) |
 | `rules.ts` | Scrutineering (weight class, budget, size, voltage, gas…) |
 | `stats.ts` | Derived stats shown in the garage |
 | `control.ts`, `vmath.ts` | `ControlState`; small vector helpers on `V3` |

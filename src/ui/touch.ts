@@ -25,7 +25,7 @@ const shape = (v: number): number => {
  */
 export class TouchControls {
   readonly el: HTMLDivElement;
-  readonly state: TouchState = { x: 0, y: 0, buttons: [false, false, false, false] };
+  readonly state: TouchState = { x: 0, y: 0, rx: 0, ry: 0, buttons: [false, false, false, false] };
   private base: HTMLDivElement;
   private knob: HTMLDivElement;
   private pad: HTMLDivElement;
@@ -92,6 +92,11 @@ export class TouchControls {
       this.knob.style.transform = `translate(${dx}px, ${dy}px)`;
       this.state.x = shape(dx / STICK_RADIUS);
       this.state.y = shape(dy / STICK_RADIUS);
+      // The same expo on how far out the knob is, keeping its direction, so
+      // a diagonal at the edge is still full speed when pointing to drive.
+      const k = d > 0 ? shape(Math.min(1, d / STICK_RADIUS)) / Math.min(d, STICK_RADIUS) : 0;
+      this.state.rx = dx * k;
+      this.state.ry = dy * k;
     };
     this.base.addEventListener('pointerdown', (e) => {
       if (this.stickPointer !== null) return;
@@ -110,7 +115,7 @@ export class TouchControls {
 
   private releaseStick() {
     this.stickPointer = null;
-    this.state.x = this.state.y = 0;
+    this.state.x = this.state.y = this.state.rx = this.state.ry = 0;
     this.knob.style.transform = '';
     this.base.classList.remove('on');
   }
@@ -127,6 +132,10 @@ export class TouchControls {
 export function buttonLabel(kinds: Set<string> | undefined, flame: boolean): string | null {
   if (flame) return 'Flame';
   if (!kinds?.size) return null;
+  if (kinds.has('cut')) return 'Cut';
+  if (kinds.has('harpoon')) return 'Harpoon';
+  if (kinds.has('cannon')) return 'Shoot';
+  if (kinds.has('winch')) return 'Winch';
   if (kinds.has('spinner')) return 'Spin';
   if (kinds.has('chain')) return 'Saw';
   if (kinds.has('pneumatic')) return 'Fire';

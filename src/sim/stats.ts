@@ -2,6 +2,7 @@ import { material, type Sourcing } from '../data/materials';
 import { BATTERIES, GEARBOX, MOTORS, RAMS, TANKS, VALVES, WHEELS, lookup } from '../data/parts';
 import { actuatorMass, actuatorOf, inertiaAbout, partFrames, partMass, registerCatalog, rigidGroup, shapeCorners, unit } from './assembly';
 import type { ActuatorDef, PartDef, RobotDesign } from './design';
+import { LAUNCH, launcherExtras, launchersOf, roundMass } from './launch';
 import { RPM_TO_RADS } from './motor';
 import { qrotate, vdot, vlen, vscale, vsub } from './vmath';
 
@@ -31,6 +32,7 @@ export function electronicsMass(d: RobotDesign): number {
 function stallAmps(d: RobotDesign): number {
   let amps = 0;
   for (const { act } of actuatorsOf(d)) if (act.type !== 'pneumatic') amps += lookup(MOTORS, act.motor, 'motor').stallCurrent;
+  for (const { launch } of launchersOf(d)) if (launch.tether?.winch) amps += lookup(MOTORS, launch.tether.winch.motor, 'motor').stallCurrent;
   return amps;
 }
 
@@ -71,6 +73,16 @@ export function billOfMaterials(d: RobotDesign): BomLine[] {
         const m = lookup(MOTORS, a.motor, 'motor');
         lines.push({ label: `${p.label}: ${m.name}${a.type === 'servo' ? ' (servo)' : ''} + ${a.gear}:1 gearbox`, mass: actuatorMass(a), cost: m.cost + GEARBOX.cost * Math.min(1, a.gear / 8), sourcing: m.sourcing, swapMinutes: m.swapMinutes + GEARBOX.swapMinutes });
       }
+    }
+  }
+  for (const { part, launch } of launchersOf(d)) {
+    const x = launcherExtras(d, part, launch);
+    if (launch.rounds) lines.push({ label: `${part.label}: ${launch.rounds} spare round${launch.rounds > 1 ? 's' : ''}`, mass: x.spares, cost: launch.rounds * (roundMass(d, part) * 20 + 30), sourcing: 'specialist', swapMinutes: 2 });
+    if (launch.tether) lines.push({ label: `${part.label}: ${launch.tether.length} m steel cable`, mass: x.cable, cost: 15 + launch.tether.length * 4, sourcing: 'common', swapMinutes: 10 });
+    const w = launch.tether?.winch;
+    if (w) {
+      const m = lookup(MOTORS, w.motor, 'motor');
+      lines.push({ label: `${part.label} winch: ${m.name} + ${w.gear}:1 gearbox, ${w.drum} mm drum`, mass: x.winch, cost: m.cost + GEARBOX.cost * Math.min(1, w.gear / 8) + 60, sourcing: m.sourcing, swapMinutes: m.swapMinutes + 10 });
     }
   }
   const amps = stallAmps(d);
@@ -175,6 +187,22 @@ export function computeStats(d: RobotDesign): RobotStats {
       const perShot = gasDensity(pressure) * area * (ram.stroke / 1000) * 1000;
       const shots = ram.hydraulic ? undefined : Math.floor(gasCapacity / perShot);
       if (ram.hydraulic) amps += (ram.pumpCurrent ?? 60) * 0.25;
+      if (part.launch) {
+        const l = part.launch;
+        const m = roundMass(d, part);
+        // Ram work into the round, ignoring valve losses: an upper bound.
+        const muzzle = Math.sqrt((2 * energy) / Math.max(1e-3, m));
+        const w = l.tether?.winch;
+        const wm = w && lookup(MOTORS, w.motor, 'motor');
+        const pull = w && wm ? (wm.stallTorque * (voltage / wm.voltage) * w.gear * GEARBOX.efficiency) / (w.drum / 1000) : 0;
+        weapons.push({
+          label: `${part.label} (${button})`, kind: 'pneumatic', energy, shots,
+          lines: [`${l.tether ? 'harpoon' : 'cannon'} · ${fmt(m, 2)} kg round at up to ${fmt(muzzle)} m/s · ${fmt(energy)} J`,
+            l.tether ? `${fmt(l.tether.length, 1)} m cable${w ? ` · winch pulls ${fmt(pull / 1000, 1)} kN` : ' · no winch'} · ${shots} shots of gas`
+              : `${1 + (l.rounds ?? 0)} round${l.rounds ? 's' : ''}${l.rounds ? `, ${fmt(l.reload ?? LAUNCH.RELOAD, 1)} s reload` : ''} · ${shots} shots of gas`],
+        });
+        continue;
+      }
       weapons.push({
         label: `${part.label} (${button})`, kind: 'pneumatic', energy, shots,
         lines: [`${fmt(force / 1000, 1)} kN ${ram.hydraulic ? 'hydraulic cylinder' : 'ram'} at ${pressure} bar${part.joint.type === 'hinge' ? ` · ${fmt(force * act.leverArm)} N·m` : ''}`,

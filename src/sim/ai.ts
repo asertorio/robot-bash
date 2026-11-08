@@ -106,6 +106,8 @@ type Button = (typeof BUTTONS)[number];
 const HIT_MARGIN = 0.03;
 /** Only bother checking targets this close (m). */
 const LOOK_RANGE = 2.5;
+/** Furthest a CPU will shoot a free round (m): any further and it'll have dropped or they'll have moved. */
+const LAUNCH_RANGE = 6;
 
 const shapes = new WeakMap<RAPIER.Collider, RAPIER.Shape>();
 const shapeOf = (c: RAPIER.Collider): RAPIER.Shape => {
@@ -133,6 +135,10 @@ export class WeaponOperator {
       const flame = me.flames.some((f) => f.def.input.source === b);
       if (!kinds && !flame) continue;
       let press = false;
+      if (kinds && (kinds.has('cannon') || kinds.has('harpoon') || kinds.has('cut') || kinds.has('winch'))) {
+        out[FIELD[b]] = this.launcherButton(me, targets, b, kinds, dt);
+        continue;
+      }
       const chainToggle = me.chains.some((c) => c.def.input.source === b && c.def.input.mode === 'toggle');
       if (kinds?.has('spinner') || chainToggle) {
         // Toggle switches: press once to switch on, then leave it.
@@ -163,6 +169,44 @@ export class WeaponOperator {
       out[FIELD[b]] = press;
     }
     return out;
+  }
+
+  /**
+   * Cannons and harpoons: fire when a target is in line and in range, hold
+   * through the stroke; never cut our own cable. Wind the winch whenever a
+   * harpoon is out and has stopped flying — dragging what it hit, or
+   * reeling it back in after a miss.
+   */
+  private launcherButton(me: Robot, targets: Robot[], b: Button, kinds: Set<string>, dt: number): boolean {
+    if (kinds.has('winch')) {
+      return me.launchers.some((l) => l.winch?.def.input.source === b && l.cable
+        && (l.cable.round.embed || vlen(l.cable.round.info.body.linvel()) < 2));
+    }
+    if (kinds.has('cut')) return false;
+    const holding = (this.hold.get(b) ?? 0) - dt;
+    const resting = (this.rest.get(b) ?? 0) - dt;
+    this.hold.set(b, holding);
+    this.rest.set(b, resting);
+    if (holding > 0) return true;
+    if (resting > 0) return false;
+    for (const l of me.launchers) {
+      if (l.act.def.input.source !== b || !l.loaded || me.gasLeft <= 0) continue;
+      const pb = l.act.parent.body;
+      const origin = vadd(pb.translation(), qrotate(pb.rotation(), l.muzzle));
+      const dir = qrotate(pb.rotation(), l.act.axis);
+      const range = l.def.tether ? l.def.tether.length * 0.85 : LAUNCH_RANGE;
+      for (const t of targets) {
+        const to = vsub(t.position, origin);
+        const along = vdot(to, dir);
+        const off = vlen(vsub(to, vscale(dir, along)));
+        if (along > 0.2 && along < range && off < 0.22 + 0.02 * along) {
+          this.hold.set(b, 0.4);
+          this.rest.set(b, 0.8);
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /** How long to hold a button for a full stroke. */
