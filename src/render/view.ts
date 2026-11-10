@@ -646,11 +646,11 @@ export class MatchView {
   }
 
   /**
-   * Behind the robot, a bit zoomed out: about 2.4 m back and 1.4 m up for a
+   * Behind the robot, a bit zoomed out: about 3.2 m back and 1.7 m up for a
    * heavyweight, further for a big robot, looking at a point just ahead of it.
    * The heading follows the chassis' forward (+Z) on the floor, eased, and
    * rate-limited so a thwackbot or a spinner's torque reaction doesn't whip
-   * the camera about. The camera stays inside the walls.
+   * the camera about.
    */
   private chaseCamera(r: Robot, dt: number) {
     const p = r.position;
@@ -665,13 +665,17 @@ export class MatchView {
       this.chaseYaw += Math.max(-dt * 3.5, Math.min(dt * 3.5, step));
     }
     const reach = Math.max(0.6, ...r.parts.map((pt) => pt.visual ? Math.hypot(pt.visual.pos.x, pt.visual.pos.z) : 0).slice(0, 40));
-    const back = 1.9 + reach * 1.1, up = 1.0 + reach * 0.7;
+    const back = 2.6 + reach * 1.4, up = 1.35 + reach * 0.8;
     const dir = new THREE.Vector3(Math.sin(this.chaseYaw), 0, Math.cos(this.chaseYaw));
     const target = new THREE.Vector3(p.x, Math.max(0, p.y) + 0.2, p.z).addScaledVector(dir, 0.9);
     const want = new THREE.Vector3(p.x, Math.max(0, p.y) + up, p.z).addScaledVector(dir, -back);
-    const lim = ARENA.half - 0.15;
+    // The walls are low: the camera may hang a little way out over them, rising
+    // as it goes so it still looks down over the top rail.
+    const lim = ARENA.half + 1.6;
     want.x = Math.max(-lim, Math.min(lim, want.x));
     want.z = Math.max(-lim, Math.min(lim, want.z));
+    const over = Math.max(Math.abs(want.x), Math.abs(want.z)) - ARENA.half;
+    if (over > 0) want.y += over * 0.6;
     const k = this.snapCamera ? 1 : 1 - Math.exp(-dt * 6);
     this.camTarget.lerp(target, k);
     this.camPos.lerp(want, k);

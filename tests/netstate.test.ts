@@ -62,3 +62,20 @@ describe('network mirror', () => {
     guest.free();
   });
 });
+
+describe('designs sent online', () => {
+  it('every built-in robot comes through JSON and checkDesign with the same parts and bodies', async () => {
+    const { checkDesign } = await import('../src/data/garage');
+    const { TEMPLATES, OPEN_CLASS } = await import('../src/data/templates');
+    const { MONSTER_HOUSE } = await import('../src/data/house');
+    for (const d of [...TEMPLATES, ...OPEN_CLASS, ...HOUSE_ROBOTS, ...MONSTER_HOUSE]) {
+      const sent = checkDesign(JSON.parse(JSON.stringify(d)));
+      const a = new Match([d], { skipCountdown: true });
+      const b = new Match([sent], { skipCountdown: true });
+      expect(b.robots[0].parts.map((p) => p.id), d.name).toEqual(a.robots[0].parts.map((p) => p.id));
+      expect(captureState(b, 0).poses[0].length, d.name).toBe(captureState(a, 0).poses[0].length);
+      a.free();
+      b.free();
+    }
+  });
+});

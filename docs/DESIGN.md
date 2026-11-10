@@ -467,10 +467,10 @@ use the same operator.
 ## Camera
 
 The TV gantry camera frames every live competitor. The chase camera sits
-behind one robot, a little zoomed out (≈2.4 m back and 1.4 m up for a
+behind one robot, a little zoomed out (≈3.2 m back and 1.7 m up for a
 heavyweight, further for a bigger robot), following the chassis' heading
-eased and rate-limited so a spin doesn't whip it round, and kept inside the
-walls. Settings → Fight camera picks the starting view; V, a pad's Back or
+eased and rate-limited so a spin doesn't whip it round; near a wall it
+hangs out over the (low) wall and rises to look over it. Settings → Fight camera picks the starting view; V, a pad's Back or
 the camera button cycles TV → behind each robot (humans first). Point-to-drive
 on a touch screen is relative to whichever camera is on.
 
