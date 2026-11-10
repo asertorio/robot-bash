@@ -1,3 +1,4 @@
+import type { Placing } from '../data/career';
 import type { RobotDesign } from '../sim/design';
 import type { MatchOptions } from '../sim/match';
 import { pairUp, type BoutResult, type Entrant } from '../sim/tournament';
@@ -81,6 +82,18 @@ export class Championship {
     const youFirst = this.entrants[a].human;
     const [you, opp] = youFirst ? [a, b] : [b, a];
     this.record(this.round, k, { winner: youWon ? you : opp, reason, wear: youFirst ? [youWear, oppWear] : [oppWear, youWear], highlights: [] });
+  }
+
+  /** How far the player got, once that's settled (null while still in it). */
+  playerPlacing(): Placing | null {
+    if (this.champion !== null && this.entrants[this.champion].human) return 'champion';
+    for (let ri = 0; ri < this.rounds.length; ri++) {
+      const r = this.rounds[ri];
+      const k = r.pairs.findIndex((p) => p.some((e) => this.entrants[e].human));
+      const res = k >= 0 ? r.results[k] : null;
+      if (res && !this.entrants[res.winner].human) return (['quarter', 'semi', 'final'] as const)[ri];
+    }
+    return null;
   }
 
   /** The player's bout, as [you, opponent] entrant indices (you first). */

@@ -70,6 +70,11 @@ over, and between rounds you get 60 minutes in the pit — each part takes its
 real swap time to fix, so choose. The other bouts are fought for real, in the
 background, while you fight yours.
 
+**Career:** a five-week season of championships ending in the Grand Final.
+Prize money raises your team budget, and your robot must cost no more than
+it — so winning buys upgrades. Every competition starts with a weigh-in and
+the scrutineers' checks (so does any fight with one of your own builds).
+
 **Side events:** *Sumo* (shove them off a raised steel dais) and *Football*
 (a real ball and a goal at each end; first to three, and in a 4-way it's
 P1 + P3 against P2 + P4) and the *Gauntlet* (race through a chicane, past the

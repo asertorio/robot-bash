@@ -25,6 +25,9 @@ import { SoundEngine } from './audio/sound';
 import { Commentator } from './audio/voice';
 import { REPLAY, ReplayPlayer, ReplayRecorder, type Clip } from './render/replay';
 import { Championship } from './ui/championship';
+import { CAREER, PLACING_TEXT, budgetOf, fieldFor, loadCareer, newCareer, recordWeek, saveCareer, seasonOver, type CareerState } from './data/career';
+import { BUDGETS, WEIGHT_CLASSES, type Rules } from './sim/rules';
+import { scrutineeringScreen, type ScrutineeringOptions } from './ui/scrutineering';
 import { BoutPool } from './workers/pool';
 import { PIT, ROUND_NAMES, cpuRepairs, pitList, repair, wearOf, type PitItem } from './sim/tournament';
 import { conditionLabel } from './sim/damage';
@@ -92,6 +95,8 @@ class App {
   private champ: Championship | null = null;
   private champPool: BoutPool | null = null;
   private champFight = false;
+  /** The championship is a week of a career season. */
+  private champCareer = false;
   /** Who's driving each competitor in the fight that's on now. */
   private live: Controller[] = [];
   private touchSeen = window.matchMedia?.('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
@@ -181,9 +186,30 @@ class App {
     return Math.min(4, Math.max(2, Math.round(this.settings.robots) || 2));
   }
 
-  private fight() {
+  /**
+   * Start the fight on the select screen. Your own builds go through the
+   * weigh-in and scrutineering first (the built-in robots are known to be
+   * legal); a rematch skips it.
+   */
+  private fight(checked = false) {
     const n = this.robotCount;
-    this.beginMatch([...Array(n).keys()].map((p) => this.pick(p)), this.controllers.slice(0, n), false, this.houseCount);
+    const designs = [...Array(n).keys()].map((p) => this.pick(p));
+    const go = () => this.beginMatch(designs, this.controllers.slice(0, n), false, this.houseCount);
+    const saved = new Set(loadDesigns().map((d) => d.id));
+    const mine = designs.filter((d, i, all) => saved.has(d.id) && all.indexOf(d) === i);
+    if (checked || !mine.length) { go(); return; }
+    this.scrutineering(mine, { onPass: go, onBack: () => this.selectScreen(), allowExhibition: true, onGarage: (d) => this.garageScreen(d, () => this.selectScreen()) });
+  }
+
+  private scrutineering(designs: RobotDesign[], o: ScrutineeringOptions) {
+    this.input.mode = 'menu';
+    const el = scrutineeringScreen(designs, o);
+    mount(this.ui, el);
+    const pass = el.querySelector<HTMLButtonElement>('.actions button.primary');
+    this.screenKeys = (code) => {
+      if (code === 'Escape') o.onBack();
+      if (code === 'Enter' && pass && !(document.activeElement instanceof HTMLButtonElement)) pass.click();
+    };
   }
 
   /** All the house robots, both sets. */
@@ -374,6 +400,7 @@ class App {
       h('div', { class: 'tagline' }, 'Build it · Fight it · Break it'),
       h('div', { class: 'menu' },
         h('button', { class: 'primary', onclick: () => this.selectScreen() }, 'Fight'),
+        h('button', { onclick: () => this.careerScreen() }, 'Career'),
         h('button', { onclick: () => this.champ ? this.bracketScreen() : this.championshipSetup() }, this.champ ? 'Championship (continue)' : 'Championship'),
         h('button', { onclick: () => this.onlineScreen() }, 'Play online'),
         h('button', { onclick: () => this.garageScreen() }, 'Garage'),
@@ -645,14 +672,18 @@ class App {
           h('span', { class: 'seg' }, ...[0, 1, 2, 4].map((n) => h('button', { class: house === n ? 'on' : '', onclick: () => { house = n; render(); } }, n === 0 ? 'Off' : String(n))))),
         h('div', { class: 'actions' },
           h('button', { onclick: () => this.mainMenu() }, 'Back'),
-          h('button', { class: 'primary', onclick: () => this.startChampionship(you, house) }, 'Start the championship'))));
+          h('button', { class: 'primary', onclick: () => this.scrutineering([you], {
+            title: 'Championship weigh-in', allowExhibition: false,
+            onPass: () => this.startChampionship(you, house), onBack: () => this.championshipSetup(),
+            onGarage: (d) => this.garageScreen(d, () => this.championshipSetup()),
+          }) }, 'Start the championship'))));
     };
     render();
   }
 
-  private startChampionship(you: RobotDesign, house: number) {
+  private startChampionship(you: RobotDesign, house: number, field = TEMPLATES.filter((d) => d.id !== you.id).sort(() => Math.random() - 0.5).slice(0, 7), career = false) {
     this.endChampionship();
-    const field = TEMPLATES.filter((d) => d.id !== you.id).sort(() => Math.random() - 0.5).slice(0, 7);
+    this.champCareer = career;
     const pool = new BoutPool();
     this.champPool = pool;
     this.champ = new Championship(you, field, house, pool, () => ({ ...this.fightOptions(false, house), event: 'fight' }));
@@ -665,6 +696,7 @@ class App {
     this.champPool = null;
     this.champ = null;
     this.champFight = false;
+    this.champCareer = false;
   }
 
   private bracketScreen() {
@@ -704,7 +736,9 @@ class App {
         pair ? `Next: ${name(pair[0])} v ${name(pair[1])}${c.entrants[pair[1]].wear ? ' — they\'ve been patched up after their last fight' : ''}.`
           : waiting ? (c.playerIn ? 'Waiting for the other bouts in this round to finish…' : 'You\'re out. The rest of the championship is being fought…') : ''),
       h('div', { class: 'actions' },
-        h('button', { onclick: () => { if (champ !== null || confirm('Give up this championship?')) { this.endChampionship(); this.mainMenu(); } } }, champ !== null ? 'Done' : 'Quit championship'),
+        this.champCareer && c.playerPlacing()
+          ? h('button', { class: 'primary', onclick: () => this.finishCareerWeek() }, `Collect £${CAREER.prizes[c.playerPlacing()!].toLocaleString()} prize money`)
+          : h('button', { onclick: () => { if (champ !== null || confirm(this.champCareer ? 'Give up this week? You can enter it again.' : 'Give up this championship?')) { const career = this.champCareer; this.endChampionship(); if (career) this.careerScreen(); else this.mainMenu(); } } }, champ !== null ? 'Done' : this.champCareer ? 'Give up this week' : 'Quit championship'),
         pair && h('button', { class: 'primary', onclick: fight }, `Fight ${name(pair[1])}! (Enter)`))));
     if (youWon && !this.ui.querySelector('.champion.said')) {
       this.ui.querySelector('.champion')?.classList.add('said');
@@ -780,6 +814,72 @@ class App {
         h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: done }, 'Back to the bracket (Enter)'))));
     };
     render();
+  }
+
+  // ---------------------------------------------------------------- career
+
+  /** Heavyweight, with the team's money as the budget. */
+  private careerRules(c: CareerState): Rules {
+    const budget = budgetOf(c);
+    return { weight: WEIGHT_CLASSES.find((w) => w.id === 'heavy')!, budget: { ...BUDGETS[0], id: 'career', name: `£${budget.toLocaleString()} team budget`, limit: budget } };
+  }
+
+  private careerScreen(message = '') {
+    const c = loadCareer() ?? newCareer();
+    saveCareer(c);
+    this.screenKeys = (code) => { if (code === 'Escape') this.mainMenu(); };
+    this.input.mode = 'menu';
+    const budget = budgetOf(c);
+    const roster = [...TEMPLATES, ...loadDesigns()];
+    const cost = (d: RobotDesign) => Math.round(computeStats(d).cost);
+    const fits = (d: RobotDesign) => cost(d) <= budget;
+    let you = roster.find((d) => d.id === this.pickIds[0] && fits(d)) ?? roster.filter(fits).sort((a, b) => cost(b) - cost(a))[0] ?? roster[0];
+    const over = seasonOver(c);
+    const weekName = (w: number) => (w === CAREER.weeks ? 'the Grand Final' : `week ${w}`);
+    const render = () => {
+      const sel = h('select', { class: 'robot-pick', 'aria-label': 'Your robot', onchange: () => { you = roster.find((d) => d.id === sel.value) ?? you; this.pickIds[0] = you.id; render(); } },
+        ...roster.map((d) => h('option', { value: d.id, selected: d === you, disabled: !fits(d) }, `${d.name} — £${cost(d).toLocaleString()}${fits(d) ? '' : ' (over budget)'}`)));
+      const rows = c.history.map((w) => h('tr', {}, h('td', {}, w.week === CAREER.weeks ? 'Grand Final' : `Week ${w.week}`), h('td', {}, w.robot), h('td', {}, PLACING_TEXT[w.placing]), h('td', {}, `£${w.prize.toLocaleString()}`)));
+      const titles = c.history.filter((w) => w.placing === 'champion').length;
+      mount(this.ui, h('div', { class: 'screen top' },
+        h('h2', {}, 'Career'),
+        message && h('div', { class: 'champion you', style: 'font-size:24px' }, message),
+        h('div', { class: 'howto', style: 'max-width:620px' },
+          h('p', {}, `A season of ${CAREER.weeks} weekly championships, ending in the Grand Final. Prize money: champion £${CAREER.prizes.champion.toLocaleString()}, runner-up £${CAREER.prizes.final.toLocaleString()}, semi-final £${CAREER.prizes.semi.toLocaleString()}, quarter-final £${CAREER.prizes.quarter.toLocaleString()}.`),
+          h('p', {}, 'Your robot must cost no more than your team budget — your starting money plus everything you\'ve won. Win, and you can afford a better robot: pick a dearer starter or upgrade your own in the garage. The fields get richer every week.')),
+        h('div', { class: 'career-stats' },
+          h('div', {}, h('b', {}, over ? 'Season over' : `Week ${c.week} of ${CAREER.weeks}`), over ? '' : c.week === CAREER.weeks ? ' — the Grand Final' : ''),
+          h('div', {}, 'Team budget ', h('b', {}, `£${budget.toLocaleString()}`)),
+          h('div', {}, 'Winnings ', h('b', {}, `£${c.winnings.toLocaleString()}`), titles ? ` · ${titles} title${titles > 1 ? 's' : ''}` : '')),
+        rows.length > 0 && h('table', { class: 'pit-list' }, ...rows),
+        !over && h('div', { class: 'house-row' }, h('span', {}, 'Your robot'), sel),
+        !over && h('div', { class: 'desc', style: 'max-width:620px;text-align:center' }, you.description),
+        h('div', { class: 'actions' },
+          h('button', { onclick: () => this.mainMenu() }, 'Back'),
+          !over && h('button', { onclick: () => this.garageScreen(you, () => this.careerScreen()) }, 'Build or upgrade in the garage'),
+          over ? h('button', { class: 'primary', onclick: () => { saveCareer(newCareer()); this.careerScreen(); } }, 'Start a new season')
+            : h('button', { class: 'primary', disabled: !fits(you), onclick: () => this.scrutineering([you], {
+              title: `Weigh-in: ${weekName(c.week)}`, rules: this.careerRules(c), allowExhibition: false,
+              onPass: () => this.startChampionship(you, 2, fieldFor(c.week, TEMPLATES, you), true),
+              onBack: () => this.careerScreen(), onGarage: (d) => this.garageScreen(d, () => this.careerScreen()),
+            }) }, `Enter ${weekName(c.week)}`)),
+        h('div', { class: 'hint', style: 'text-align:center;margin-top:8px' }, 'Robots built in the garage appear in the list once saved. In the garage, set the budget to the nearest class to keep an eye on cost as you build.')));
+    };
+    render();
+  }
+
+  /** Bank this week's prize money and go back to the season. */
+  private finishCareerWeek() {
+    const ch = this.champ;
+    const placing = ch?.playerPlacing();
+    if (!ch || !placing) return;
+    const c = loadCareer() ?? newCareer();
+    const week = c.week;
+    const next = recordWeek(c, ch.entrants[0].design.name, placing);
+    saveCareer(next);
+    this.endChampionship();
+    const what = week === CAREER.weeks ? 'the Grand Final' : `week ${week}`;
+    this.careerScreen(`${PLACING_TEXT[placing]} of ${what}: £${CAREER.prizes[placing].toLocaleString()}${seasonOver(next) ? ' — season over!' : ''}`);
   }
 
   // ---------------------------------------------------------------- online
@@ -982,7 +1082,7 @@ class App {
     // Result on screen: Enter is a rematch (online, only the host can start one).
     if (code === 'Enter' && this.resultShown && this.ui.querySelector('.overlay .winner') && !(document.activeElement instanceof HTMLButtonElement)) {
       if (this.champFight) this.finishChampBout();
-      else if (!this.net) this.fight();
+      else if (!this.net) this.fight(true);
       else if (this.net.link.role === 'host') this.hostFight();
       return;
     }
@@ -1026,7 +1126,7 @@ class App {
         h('h2', {}, 'Paused'),
         h('div', { class: 'menu' },
           h('button', { class: 'primary', onclick: () => this.togglePause() }, 'Resume'),
-          h('button', { onclick: () => this.fight() }, 'Restart fight'),
+          h('button', { onclick: () => this.fight(true) }, 'Restart fight'),
           h('button', { onclick: () => this.leaveFight(() => this.selectScreen()) }, 'Change robots'),
           h('button', { onclick: () => this.leaveFight(() => this.mainMenu()) }, 'Quit to menu')))));
   }
@@ -1131,7 +1231,7 @@ class App {
         h('button', { onclick: () => this.leaveFight(() => this.onlineScreen()) }, 'Leave online fight'));
     }
     return h('div', { class: 'menu' },
-      h('button', { class: 'primary', onclick: () => this.fight() }, 'Rematch (Enter)'),
+      h('button', { class: 'primary', onclick: () => this.fight(true) }, 'Rematch (Enter)'),
       h('button', { onclick: () => this.leaveFight(() => this.selectScreen()) }, 'Change robots'),
       h('button', { onclick: () => this.leaveFight(() => this.mainMenu()) }, 'Main menu'));
   }

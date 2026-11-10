@@ -361,6 +361,26 @@ flamethrowers are; a harpoon on a cable is allowed everywhere.
 Warnings cover a battery that won't last 3 minutes, battery-limited pushing,
 flipper plates that can't reach the floor, and very high ground clearance.
 
+**The weigh-in** (`src/ui/scrutineering.ts`): before a fight with one of
+your own builds, and always before a championship or a career week, each
+robot goes on the scales (a dial against the class limit), then its
+footprint against the arena doors, its cost against any budget, and the
+scrutineers' list. A failed robot can still fight an exhibition bout in an
+ordinary fight; in a competition it has to be fixed (straight to the garage).
+
+## Career
+
+`src/data/career.ts`: a season of `CAREER.weeks` (5) weekly championships,
+the last the Grand Final, saved in the browser. Prize money: champion
+£6,000, runner-up £3,000, semi-final £1,500, quarter-final £500. The team
+budget is £3,500 plus everything won, and the robot entered must cost no
+more (checked at the weigh-in with a budget rule). That's what buys
+upgrades: a dearer starter, or your own build improved in the garage.
+£3,500 covers 12 of the 28 starters (Whippet £2,159 … Whisk £3,483). Each
+week's field is drawn from robots costing up to £2,900 + £550 × week, so
+the opposition gets richer. Giving up a week costs nothing; you can enter
+it again.
+
 ## Rules (per fight)
 
 - **Duel or melee:** 2 robots, or 3–4 (everyone for themselves, like the
@@ -643,7 +663,8 @@ development.
 5. **Tournament:** a championship knockout with pit repairs is done (v0.9);
    series of heats → final, side events (sumo, football and the gauntlet done
    in v0.9; pinball, gauntlet, trials to come), pit repairs limited by time, budget and spares.
-6. **Campaign:** progression and unlocks; restricted weapons (fire, etc.) in
+6. **Campaign:** a five-week career with prize money and a budget is done
+   (v0.9); more progression and unlocks; restricted weapons (fire, etc.) in
    special classes.
 7. **Full freedom:** AI-assisted design from a description or sketch (a model
    emits a RobotDesign). Free-form shapes and materials are done (v0.4).
