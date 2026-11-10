@@ -37,6 +37,19 @@ export function sumoAim(me: Robot, foe: Robot | undefined, radius: number): V3 |
 export const nearDaisEdge = (me: Robot, radius: number): boolean => Math.hypot(me.position.x, me.position.z) > radius - 0.9;
 
 /**
+ * Gauntlet: through the first gap (−x side), across to the second (+x side,
+ * through the crates), then straight for the line. Aim just past each gap so
+ * the robot doesn't stop in it.
+ */
+export function gauntletAim(me: Robot): V3 {
+  const [b1, b2] = ARENA.gauntlet.barriers;
+  const z = me.position.z;
+  if (z < b1.z + 0.3) return { x: (b1.x0 - ARENA.half) / 2, y: 0, z: b1.z + 0.8 };
+  if (z < b2.z + 0.3) return { x: (b2.x1 + ARENA.half) / 2, y: 0, z: b2.z + 0.8 };
+  return { x: me.position.x * 0.5, y: 0, z: ARENA.half };
+}
+
+/**
  * Football: get behind the ball (on the far side from the goal you're
  * attacking) and drive through it. Coming from the wrong side, go round it
  * on whichever side you're already on, rather than knocking it back.

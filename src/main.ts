@@ -6,7 +6,7 @@ import { CRASH_TEST_DUMMY, TEMPLATES, OPEN_CLASS } from './data/templates';
 import { describeBinding, loadProfiles, saveProfiles, type ControlProfile } from './input/bindings';
 import { InputManager } from './input/input';
 import { MatchView } from './render/view';
-import { CpuDriver, footballAim, nearDaisEdge, sumoAim } from './sim/ai';
+import { CpuDriver, footballAim, gauntletAim, nearDaisEdge, sumoAim } from './sim/ai';
 import { ARENA } from './sim/arena';
 import type { RobotDesign } from './sim/design';
 import { BIG_HIT, Match, type GameEvent, type MatchOptions } from './sim/match';
@@ -290,6 +290,7 @@ class App {
           const rivals = m.competitors.filter((_, j) => j !== i && !m.eliminated[j] && (m.event !== 'football' || j % 2 !== i % 2));
           const foe = cpu.chooseFoe(r, rivals);
           if (m.event === 'sumo') return cpu.update(r, foe, m.arena.pitOpen, dt, { aim: sumoAim(r, foe, ARENA.dais.radius), noReverse: nearDaisEdge(r, ARENA.dais.radius) });
+          if (m.event === 'gauntlet') return cpu.update(r, foe, m.arena.pitOpen, dt, { aim: gauntletAim(r) });
           if (m.event === 'football' && m.ball) return cpu.update(r, foe, m.arena.pitOpen, dt, { aim: footballAim(r, m.ball.translation(), { x: 0, y: 0, z: i % 2 === 0 ? ARENA.half : -ARENA.half }) });
           return cpu.update(r, foe, m.arena.pitOpen, dt);
         }
@@ -476,6 +477,7 @@ class App {
       const eventHint: Record<GameEvent, string> = {
         fight: 'Immobilise them, pit them, throw them out — or win on points.',
         sumo: 'A raised steel dais in the middle of the arena. Push them off it (or watch them drive off) and they\'re out.',
+        gauntlet: 'A race through the obstacle course to the chequered line: through the chicane, past the floor flipper and flame pit, through the crates. First over the line wins; at time, whoever got furthest. Fighting allowed.',
         football: `First to three goals. Push the ball into the far end's goal; you defend your own. ${n > 2 ? 'Teams: P1 and P3 red, P2 and P4 blue.' : 'Weapons allowed.'}`,
       };
       mount(this.ui, h('div', { class: 'screen top' },
@@ -484,7 +486,7 @@ class App {
           h('span', { class: 'seg' }, ...[2, 3, 4].map((c) => h('button', { class: n === c ? 'on' : '', onclick: () => setCount(c) }, c === 2 ? '1 v 1' : `${c}-way melee`))),
           h('span', { class: 'hint' }, n === 2 ? 'A straight duel.' : 'Everyone for themselves, like the first round of a heat: last robot standing wins, or the judges decide.')),
         h('div', { class: 'house-row', style: 'margin:0 0 14px' }, h('span', {}, 'Event'),
-          h('span', { class: 'seg' }, ...([['fight', 'Fight'], ['sumo', 'Sumo'], ['football', 'Football']] as Array<[GameEvent, string]>).map(([e, label]) => h('button', { class: ev === e ? 'on' : '', onclick: () => setEvent(e) }, label))),
+          h('span', { class: 'seg' }, ...([['fight', 'Fight'], ['sumo', 'Sumo'], ['football', 'Football'], ['gauntlet', 'Gauntlet']] as Array<[GameEvent, string]>).map(([e, label]) => h('button', { class: ev === e ? 'on' : '', onclick: () => setEvent(e) }, label))),
           h('span', { class: 'hint' }, eventHint[ev])),
         h('div', { class: 'select-row' }, ...cards),
         h('div', { class: 'house-row' }, h('span', {}, 'House robots'),

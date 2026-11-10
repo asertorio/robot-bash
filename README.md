@@ -72,7 +72,9 @@ background, while you fight yours.
 
 **Side events:** *Sumo* (shove them off a raised steel dais) and *Football*
 (a real ball and a goal at each end; first to three, and in a 4-way it's
-P1 + P3 against P2 + P4). Pick the event on the select screen.
+P1 + P3 against P2 + P4) and the *Gauntlet* (race through a chicane, past the
+hazards and through a pile of crates to the chequered line — with the house
+robots after you). Pick the event on the select screen.
 
 **Action replays:** a knockout into the pit or over the wall, or the
 fight's biggest hit, plays again in slow motion before the result.

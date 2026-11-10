@@ -61,3 +61,26 @@ describe('football', () => {
     m.free();
   });
 });
+
+describe('gauntlet', () => {
+  test('a CPU runs the course — chicane, crates and all — and wins by crossing the line', async () => {
+    const { gauntletAim } = await import('../src/sim/ai');
+    const m = new Match([WEDGEHOG, FLIPSIDE], { skipCountdown: true, event: 'gauntlet', duration: 90 });
+    expect(m.crates.length).toBeGreaterThan(3);
+    const cpu = new CpuDriver();
+    const me = m.competitors[0];
+    run(m, 60, () => [cpu.update(me, m.competitors[1], false, 1 / 480, { aim: gauntletAim(me) }), N]);
+    expect(m.result?.winner).toBe(0);
+    expect(m.result?.reason).toMatch(/crossed the line first/);
+    console.log(`gauntlet run: ${m.endTime?.toFixed(1)} s`);
+    m.free();
+  });
+
+  test('at time, the one furthest along wins', () => {
+    const m = new Match([WEDGEHOG, FLIPSIDE], { skipCountdown: true, event: 'gauntlet', duration: 3 });
+    run(m, 3.2, () => [drive(1), N]);
+    expect(m.progress[0]).toBeGreaterThan(m.progress[1] + 1);
+    expect(m.result?.winner).toBe(0);
+    m.free();
+  });
+});

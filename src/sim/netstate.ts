@@ -51,6 +51,9 @@ export interface NetState {
   /** Football: the ball's x y z qx qy qz qw, and the score. */
   ball: number[] | null;
   goals: [number, number];
+  /** Gauntlet: each crate's x y z qx qy qz qw, and how far up the course each competitor's got. */
+  crates?: number[][];
+  progress?: number[];
 }
 
 /** A robot's distinct bodies, in part order (the same on both sides once the same parts are off). */
@@ -108,6 +111,8 @@ export function captureState(m: Match, commentaryFrom: number): NetState {
     arena: Float32Array.from([td.x, td.y, td.z, ff.x, ff.y, ff.z, ff.w]),
     ball: m.ball ? (() => { const t = m.ball!.translation(), q = m.ball!.rotation(); return [t.x, t.y, t.z, q.x, q.y, q.z, q.w]; })() : null,
     goals: [m.goals[0], m.goals[1]],
+    crates: m.crates.map((b) => { const t = b.translation(), q = b.rotation(); return [t.x, t.y, t.z, q.x, q.y, q.z, q.w]; }),
+    progress: [...m.progress],
   };
 }
 
@@ -194,6 +199,13 @@ export function applyState(m: Match, s: NetState, prev: NetState | null = null, 
     m.ball.setRotation({ x: b[3], y: b[4], z: b[5], w: b[6] }, false);
   }
   if (s.goals) m.goals = [s.goals[0], s.goals[1]];
+  s.crates?.forEach((c, i) => {
+    const b = m.crates[i];
+    if (!b) return;
+    b.setTranslation({ x: c[0], y: c[1], z: c[2] }, false);
+    b.setRotation({ x: c[3], y: c[4], z: c[5], w: c[6] }, false);
+  });
+  if (s.progress) m.progress = [...s.progress];
 }
 
 /** NetState as plain JSON (typed arrays become number arrays), for the wire. */

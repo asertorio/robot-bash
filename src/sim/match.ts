@@ -38,8 +38,10 @@ export type Phase = 'countdown' | 'fight' | 'over';
  * - football: a ball and a goal at each end; first to GOALS_TO_WIN, or the
  *   most goals at time. In a melee, even-numbered players (P1, P3) are the
  *   red team at the −z end and odd-numbered ones blue at the +z end.
+ * - gauntlet: a race through obstacles (ARENA.gauntlet) to the finish line;
+ *   first over it wins, else whoever got furthest at time. Fighting allowed.
  */
-export type GameEvent = 'fight' | 'sumo' | 'football';
+export type GameEvent = 'fight' | 'sumo' | 'football' | 'gauntlet';
 export const GOALS_TO_WIN = 3;
 
 /**
@@ -161,6 +163,9 @@ export class Match {
   /** Football: the ball, and goals scored by red (P1, P3) and blue (P2, P4). */
   readonly ball: RAPIER.RigidBody | null = null;
   goals: [number, number] = [0, 0];
+  /** Gauntlet: the loose crates, and how far up the course each competitor has got (m, the furthest z reached). */
+  readonly crates: RAPIER.RigidBody[] = [];
+  progress: number[] = [];
   /** Competitors in the order they went out (first out first). */
   outOrder: number[] = [];
 
@@ -199,6 +204,7 @@ export class Match {
     if (opts.wallSpikes) this.arena.addSpikes();
     if (this.event === 'sumo') this.arena.addDais();
     if (this.event === 'football') this.ball = this.arena.addBall();
+    if (this.event === 'gauntlet') this.crates = this.arena.addGauntlet();
     const spawns = opts.spawns ?? eventSpawns(this.event, designs.length) ?? [
       { pos: { x: 0, y: 0.01, z: -3.5 }, yaw: 0 },
       { pos: { x: 0, y: 0.01, z: 3.5 }, yaw: Math.PI },
@@ -236,6 +242,7 @@ export class Match {
     this.lastSelfMove = this.competitors.map(() => 0);
     this.movingFor = this.competitors.map(() => 0);
     this.tally = this.competitors.map(() => ({ aggression: 0, control: 0, damage: 0, style: 0 }));
+    this.progress = this.competitors.map((r) => r.position.z);
   }
 
   /** Advance by a frame's worth of real time, in fixed physics steps. */
@@ -648,6 +655,7 @@ export class Match {
     this.lastStanding = standing;
 
     if (this.event === 'football' && this.phase === 'fight') this.football();
+    if (this.event === 'gauntlet' && this.phase === 'fight' && !this.sandbox) this.gauntlet();
     if (this.phase === 'fight' && !this.sandbox && this.event === 'football') {
       // A team with nobody left loses; otherwise goals decide, at 3 or at time.
       const teamLeft = [0, 1].map((t) => this.competitors.some((_, i) => i % 2 === t && !this.eliminated[i]));
@@ -658,6 +666,14 @@ export class Match {
         const [r, b] = this.goals;
         if (r === b) this.finish({ winner: null, reason: `A ${r}–${b} draw` });
         else this.finish({ winner: r > b ? 0 : 1, reason: `${r}–${b} at full time` });
+      }
+    } else if (this.phase === 'fight' && !this.sandbox && this.event === 'gauntlet') {
+      // Everyone out: nobody made it. At time: furthest up the course.
+      if (alive().length === 0) this.finish({ winner: null, reason: 'Nobody survived the gauntlet' });
+      else if (this.time >= this.duration) {
+        const best = this.competitors.map((_, i) => i).filter((i) => !this.eliminated[i]).sort((a, b) => this.progress[b] - this.progress[a])[0];
+        const g = ARENA.gauntlet;
+        this.finish({ winner: best, reason: `Furthest along the course: ${Math.round((100 * (this.progress[best] - g.startZ)) / (g.finishZ - g.startZ))}% of the way` });
       }
     } else if (this.phase === 'fight' && !this.sandbox) {
       const left = alive();
@@ -673,6 +689,19 @@ export class Match {
         this.judge();
       }
     }
+  }
+
+  /** Gauntlet: track progress; first over the finish line wins. */
+  private gauntlet() {
+    const g = ARENA.gauntlet;
+    this.competitors.forEach((r, i) => {
+      if (this.eliminated[i] || this.phase !== 'fight') return;
+      this.progress[i] = Math.max(this.progress[i], r.position.z);
+      if (r.position.z > g.finishZ && r.position.y > -0.2 && Math.abs(r.position.x) < ARENA.half) {
+        this.say(`${r.design.name} has run the gauntlet!`, 'major');
+        if (this.competitors.length > 0) this.finish({ winner: i, reason: `${r.design.name} crossed the line first` });
+      }
+    });
   }
 
   /** Football: goals, and a ball that's gone in the pit or out of the arena comes back. */
@@ -876,6 +905,10 @@ function eventSpawns(event: GameEvent, n: number): Array<{ pos: V3; yaw: number 
       const x = Math.sin(a) * r, z = -Math.cos(a) * r;
       return { pos: { x, y, z }, yaw: Math.atan2(-x, -z) };
     });
+  }
+  if (event === 'gauntlet') {
+    const xs = [-2.2, 0.2, -4.4, 2.6];
+    return [...Array(n).keys()].map((i) => ({ pos: { x: xs[i % 4], y: 0.01, z: ARENA.gauntlet.startZ }, yaw: 0 }));
   }
   if (event === 'football') {
     return [...Array(n).keys()].map((i) => {

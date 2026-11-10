@@ -47,6 +47,7 @@ export class MatchView {
   /** Side events' scenery (the sumo dais, goal mouths) and the football. */
   private eventGroup = new THREE.Group();
   private ballMesh: THREE.Mesh | null = null;
+  private crateMeshes: THREE.Mesh[] = [];
   /** Chase camera's heading (world yaw), smoothed so a spin doesn't whip it round. */
   private chaseYaw = 0;
   followIndex = 0;
@@ -472,6 +473,13 @@ export class MatchView {
       const fq = m.arena.floorFlipper.rotation();
       this.floorFlipper.quaternion.set(fq.x, fq.y, fq.z, fq.w);
       this.syncFlames(m, dt);
+      m.crates.forEach((b, i) => {
+        const c = this.crateMeshes[i];
+        if (!c) return;
+        const t = b.translation(), q = b.rotation();
+        c.position.set(t.x, t.y, t.z);
+        c.quaternion.set(q.x, q.y, q.z, q.w);
+      });
       if (this.ballMesh && m.ball) {
         const rb = this.replay?.ball;
         const t = rb ?? m.ball.translation(), q = rb ? { x: rb.qx, y: rb.qy, z: rb.qz, w: rb.qw } : m.ball.rotation();
@@ -668,6 +676,30 @@ export class MatchView {
     });
     this.eventGroup.clear();
     this.ballMesh = null;
+    this.crateMeshes = [];
+    if (m.event === 'gauntlet') {
+      const g = ARENA.gauntlet;
+      const stripe = new THREE.MeshStandardMaterial({ map: makeStripeTexture(), metalness: 0.4, roughness: 0.5 });
+      for (const b of g.barriers) {
+        const wall = new THREE.Mesh(new THREE.BoxGeometry(b.x1 - b.x0, g.barrierHeight, 0.15), stripe);
+        wall.position.set((b.x0 + b.x1) / 2, g.barrierHeight / 2, b.z);
+        wall.castShadow = wall.receiveShadow = true;
+        this.eventGroup.add(wall);
+      }
+      const crateMat = new THREE.MeshStandardMaterial({ map: makeCrateTexture(), roughness: 0.85 });
+      for (let i = 0; i < m.crates.length; i++) {
+        const c = new THREE.Mesh(new THREE.BoxGeometry(g.crateSize, g.crateSize, g.crateSize), crateMat);
+        c.castShadow = c.receiveShadow = true;
+        this.crateMeshes.push(c);
+        this.eventGroup.add(c);
+      }
+      for (const [z, tex] of [[g.startZ - 0.35, makeLineTexture(false)], [g.finishZ + 0.2, makeLineTexture(true)]] as const) {
+        const line = new THREE.Mesh(new THREE.PlaneGeometry(ARENA.half * 2, 0.4), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 }));
+        line.rotation.x = -Math.PI / 2;
+        line.position.set(0, 0.004, z);
+        this.eventGroup.add(line);
+      }
+    }
     if (m.arena.spikeColliders.size) {
       // Wall spikes: a dark steel plate with two rows of ground points, sized to the collider.
       const sp = ARENA.spikes;
@@ -972,6 +1004,36 @@ function makeDaisTexture(): THREE.CanvasTexture {
     g.textAlign = 'center';
     g.fillText('SUMO', 256, 272);
   });
+}
+
+/** Plywood crate: grain, a darker frame round each face, stencilled lettering. */
+function makeCrateTexture(): THREE.CanvasTexture {
+  return canvasTexture(128, (g) => {
+    g.fillStyle = '#b98a52';
+    g.fillRect(0, 0, 128, 128);
+    for (let y = 0; y < 128; y += 3) { g.fillStyle = `rgba(90,55,20,${0.05 + Math.random() * 0.08})`; g.fillRect(0, y, 128, 1); }
+    g.strokeStyle = '#7a5530';
+    g.lineWidth = 12;
+    g.strokeRect(6, 6, 116, 116);
+    g.fillStyle = 'rgba(30,20,10,0.6)';
+    g.font = 'bold 20px sans-serif';
+    g.textAlign = 'center';
+    g.fillText('FRAGILE', 64, 70);
+  });
+}
+
+/** Start line (plain) or finish line (chequered), across the arena. */
+function makeLineTexture(chequered: boolean): THREE.CanvasTexture {
+  const t = canvasTexture(256, (g) => {
+    g.fillStyle = '#f4f4f0';
+    g.fillRect(0, 0, 256, 256);
+    if (!chequered) return;
+    g.fillStyle = '#111';
+    for (let x = 0; x < 8; x++) for (let y = 0; y < 2; y++) if ((x + y) % 2) g.fillRect(x * 32, y * 128, 32, 128);
+  });
+  t.wrapS = THREE.RepeatWrapping;
+  t.repeat.set(chequered ? 12 : 1, 1);
+  return t;
 }
 
 /** A classic black-and-white football, near enough: dark patches on white. */

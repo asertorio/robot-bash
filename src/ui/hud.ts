@@ -1,4 +1,5 @@
 import type { MatchView } from '../render/view';
+import { ARENA } from '../sim/arena';
 import { conditionLabel } from '../sim/damage';
 import type { Match } from '../sim/match';
 import type { Robot } from '../sim/robot';
@@ -149,7 +150,9 @@ export class Hud {
       this.big.classList.toggle('flash', m.time >= 1.2 && m.time < this.flashUntil);
     }
     m.competitors.forEach((r, i) => {
-      this.metas[i].innerHTML = this.instruments(r, m.eliminated[i]);
+      const g = ARENA.gauntlet;
+      const course = m.event === 'gauntlet' ? `Course <b>${Math.max(0, Math.min(100, Math.round((100 * (m.progress[i] - g.startZ)) / (g.finishZ - g.startZ))))}%</b><br>` : '';
+      this.metas[i].innerHTML = course + this.instruments(r, m.eliminated[i]);
       this.gaugeBoxes[i].replaceChildren(...(m.eliminated[i] ? [] : this.gauges(r)));
       if (this.reportMode !== 'off') this.diagrams[i].draw(r);
     });

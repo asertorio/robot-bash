@@ -35,6 +35,21 @@ export const ARENA = {
    * `depth` of the wall between the posts.
    */
   football: { ballRadius: 0.22, ballMass: 1.6, goalHalfWidth: 1.1, depth: 0.5 },
+  /**
+   * The gauntlet: start at the −z end, finish over the line at +z. Two steel
+   * barriers make a chicane — the first leaves a gap on the −x side (past the
+   * floor flipper), the second on the +x side (past the flame pit) — and loose
+   * plywood crates block the run up to the second gap.
+   */
+  gauntlet: {
+    startZ: -5,
+    finishZ: 4.9,
+    barriers: [{ z: -2.5, x0: -1.2, x1: 6 }, { z: 1.5, x0: -6, x1: 1.2 }],
+    barrierHeight: 0.32,
+    crates: [[2.4, 0.5], [3.3, 0.9], [4.2, 0.4], [3.0, -0.2], [4.0, 1.1], [5.0, 0.8]] as Array<[number, number]>,
+    crateSize: 0.4,
+    crateMass: 14,
+  },
 };
 
 export interface Rect { x0: number; x1: number; z0: number; z1: number }
@@ -265,6 +280,27 @@ export class Arena {
         this.spikeColliders.add(c.handle);
       }
     }
+  }
+
+  /** The gauntlet's barriers (fixed) and crates (loose; returned). */
+  addGauntlet(): RAPIER.RigidBody[] {
+    const g = ARENA.gauntlet;
+    const ground = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+    for (const b of g.barriers) {
+      const c = this.world.createCollider(
+        RAPIER.ColliderDesc.cuboid((b.x1 - b.x0) / 2, g.barrierHeight / 2, 0.075).setTranslation((b.x0 + b.x1) / 2, g.barrierHeight / 2, b.z)
+          .setFriction(0.3).setRestitution(0.05).setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Min).setCollisionGroups(ARENA_GROUPS),
+        ground,
+      );
+      this.staticColliders.add(c.handle);
+    }
+    const h = g.crateSize / 2;
+    return g.crates.map(([x, z]) => {
+      const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, h + 0.005, z).setRotation({ x: 0, y: Math.sin(x * 3), z: 0, w: Math.cos(x * 3) }).setLinearDamping(0.1).setAngularDamping(0.3));
+      // Plywood crates: debris as far as collisions go, so they're shoved, not fought.
+      this.world.createCollider(RAPIER.ColliderDesc.cuboid(h, h, h).setMass(g.crateMass).setFriction(0.5).setRestitution(0.1).setCollisionGroups(DEBRIS_GROUPS), body);
+      return body;
+    });
   }
 
   /** Sumo: raise the dais (once). */

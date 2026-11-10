@@ -520,6 +520,14 @@ are `GameEvent` in `src/sim/match.ts`, the geometry `ARENA.dais` and
   gets behind the ball, on the far side from the goal it's attacking, and
   drives through it (`footballAim`); from the wrong side it goes round.
 
+- **Gauntlet:** a race from the −z end to a chequered line at z = 4.9
+  through a chicane of two 0.32 m steel barriers (the first gap on the −x
+  side, past the floor flipper; the second on the +x side, past the flame
+  pit), with six loose 14 kg plywood crates (debris for collisions) in front
+  of the second gap. First over the line wins; at time, whoever got furthest
+  up the course; fighting allowed. The CPU follows the gaps (`gauntletAim`)
+  and runs it in about 9 s.
+
 ## Camera
 
 The TV gantry camera frames every live competitor. The chase camera sits
@@ -633,8 +641,8 @@ development.
    spinners (crusher, flame thrower), and the pit being usable by house robots
    to finish victims.
 5. **Tournament:** a championship knockout with pit repairs is done (v0.9);
-   series of heats → final, side events (sumo and football done in
-   v0.9; pinball, gauntlet, trials to come), pit repairs limited by time, budget and spares.
+   series of heats → final, side events (sumo, football and the gauntlet done
+   in v0.9; pinball, gauntlet, trials to come), pit repairs limited by time, budget and spares.
 6. **Campaign:** progression and unlocks; restricted weapons (fire, etc.) in
    special classes.
 7. **Full freedom:** AI-assisted design from a description or sketch (a model
