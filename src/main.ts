@@ -15,7 +15,7 @@ import type { ControlState } from './sim/control';
 import { isLegal, scrutineer } from './sim/rules';
 import { computeStats } from './sim/stats';
 import { controlsScreen } from './ui/controls';
-import { Garage } from './ui/garage';
+import { Garage, takeSharedDesign } from './ui/garage';
 import { h, mount } from './ui/dom';
 import { statLines } from './ui/format';
 import { Hud, PLAYER_COLOURS } from './ui/hud';
@@ -116,6 +116,8 @@ class App {
     this.ui.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest?.('button')) this.sound.click(); });
     this.attract();
     this.mainMenu();
+    // Opened from a share link (#robot=…): put that robot on the garage bench.
+    void takeSharedDesign().then((d) => { if (d) this.garageScreen(d); });
     requestAnimationFrame((t) => this.frame(t));
   }
 
