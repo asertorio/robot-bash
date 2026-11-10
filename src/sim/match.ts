@@ -42,6 +42,16 @@ export type Phase = 'countdown' | 'fight' | 'over';
 export type GameEvent = 'fight' | 'sumo' | 'football';
 export const GOALS_TO_WIN = 3;
 
+/**
+ * Wall spikes, as an attacker: hardened-steel points. A robot hitting a
+ * strip takes the impact as it would from a robot's spike (hitShare with a
+ * hardened spike edge, doubled because against the arena the robot takes the
+ * whole impact rather than half), and a robot pinned on it is pierced like
+ * anything else under steady force (PIERCE in damage.ts). `sayAbove` (J):
+ * hits worth a line of commentary.
+ */
+export const SPIKES = { material: 'hardox', sayAbove: 30 };
+
 export interface CommentaryLine {
   time: number;
   text: string;
@@ -104,6 +114,8 @@ export interface MatchOptions {
   finale?: boolean;
   /** A side event instead of a fight (default 'fight'). */
   event?: GameEvent;
+  /** Spike strips on the side walls. */
+  wallSpikes?: boolean;
   /**
    * Damage carried in from an earlier fight (a championship): per competitor,
    * each part's condition by index in `robot.parts` (see sim/tournament.ts).
@@ -176,6 +188,7 @@ export class Match {
   private lastCutSay = new Map<string, number>();
   private lastBigSay = -99;
   private lastStanding = Infinity;
+  private lastSpikeSay = new Map<Robot, number>();
 
   constructor(designs: RobotDesign[], opts: MatchOptions = {}) {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -183,6 +196,7 @@ export class Match {
     this.world.numSolverIterations = 8;
     this.arena = new Arena(this.world);
     this.event = opts.event ?? 'fight';
+    if (opts.wallSpikes) this.arena.addSpikes();
     if (this.event === 'sumo') this.arena.addDais();
     if (this.event === 'football') this.ball = this.arena.addBall();
     const spawns = opts.spawns ?? eventSpawns(this.event, designs.length) ?? [
@@ -329,6 +343,9 @@ export class Match {
         normal = flipped ? vscale(mn, -1) : mn;
       });
       if (!point || !normal) return;
+      // A robot on the wall spikes: pierced under steady force, like any spike.
+      const spike = !(owner1 && owner2) && (this.arena.spikeColliders.has(c1.handle) || this.arena.spikeColliders.has(c2.handle));
+      if (spike) this.onSpikes((owner1 ?? owner2)!, e.totalForceMagnitude(), point);
       const v1 = this.preVelocity(c1, point, snap);
       const v2 = this.preVelocity(c2, point, snap);
       const rel = vsub(v1, v2);
@@ -369,6 +386,10 @@ export class Match {
         const p1 = owner1.part, p2 = owner2.part;
         share1 = hitShare(p2, p1);
         share2 = hitShare(p1, p2);
+      } else if (spike) {
+        const victim = (owner1 ?? owner2)!;
+        const share = 2 * hitShare(SPIKE_SIDE, victim.part);
+        if (owner1) share1 = share; else share2 = share;
       }
       const prior1 = ep.energy * share1, prior2 = ep.energy * share2;
       const before = ep.energy;
@@ -380,6 +401,13 @@ export class Match {
           this.lastBigSay = this.time;
           const [hitter, hit] = owner1.part.edge !== 'blunt' ? [owner1, owner2] : [owner2, owner1];
           this.say(BIG_LINES[Math.floor(this.time * 7) % BIG_LINES.length](hitter.robot.design.name, hit.robot.design.name), 'major');
+        }
+      }
+      if (spike && before < SPIKES.sayAbove && ep.energy >= SPIKES.sayAbove && this.phase === 'fight') {
+        const who = (owner1 ?? owner2)!.robot;
+        if (this.time - (this.lastSpikeSay.get(who) ?? -99) > 5) {
+          this.lastSpikeSay.set(who, this.time);
+          this.say(`${who.design.name} is slammed into the wall spikes!`, 'major');
         }
       }
       if (ep.energy > 20 && ep.energy > (this.biggestHit?.energy ?? 0) && (owner1 || owner2)) {
@@ -445,6 +473,17 @@ export class Match {
       const what = d.kind === 'wheel' ? 'a tyre' : d.label.toLowerCase().includes(metal.split('-')[0]) ? lowerFirst(d.label) : `${metal} ${lowerFirst(d.label)}`;
       this.say(`${att.robot.design.name}'s ${tool} is ${verb} ${def.robot.design.name}'s ${what}!`, 'info');
     }
+  }
+
+  /** Steady force on the wall spikes pierces plate, as a robot's spike would. */
+  private onSpikes(victim: Wear, force: number, point: V3) {
+    const d = victim.part;
+    if (d.kind !== 'structure' || d.detached) return;
+    const fp = pierceForce(d.material, d.thickness);
+    if (force <= fp) return;
+    const over = Math.min(PIERCE.MAX_OVERLOAD, force / fp - 1);
+    const bite = Math.sqrt(Math.max(0.05, Math.min(4, hardnessOf(material(SPIKES.material)) / hardnessOf(material(d.material)))));
+    victim.robot.cut(d, PIERCE.RATE * over * bite * STEP, point);
   }
 
   private owner(c: RAPIER.Collider): { robot: Robot; part: Part } | null {
@@ -817,6 +856,9 @@ export class Match {
 }
 
 const TEAM = ['Red', 'Blue'];
+
+/** The wall spikes as the attacking side of a hit (see hitShare). */
+const SPIKE_SIDE = { kind: 'structure' as const, material: SPIKES.material, edge: 'spike' as const };
 
 /** "Flipside was immobilised", "Whisk went into the pit". */
 const outPhrase = (name: string, how: string | null): string => (how === 'immobilised' ? `${name} was immobilised` : `${name} went ${how ?? 'out'}`);

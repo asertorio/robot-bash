@@ -668,6 +668,37 @@ export class MatchView {
     });
     this.eventGroup.clear();
     this.ballMesh = null;
+    if (m.arena.spikeColliders.size) {
+      // Wall spikes: a dark steel plate with two rows of ground points, sized to the collider.
+      const sp = ARENA.spikes;
+      const plateMat = new THREE.MeshStandardMaterial({ color: 0x2b2e33, metalness: 0.8, roughness: 0.45 });
+      const spikeMat = new THREE.MeshStandardMaterial({ color: 0xc9ccd1, metalness: 0.9, roughness: 0.25 });
+      // Plate and points together are exactly the collider's depth.
+      const tip = 0.06, plateD = sp.depth - tip;
+      const cone = new THREE.ConeGeometry(0.022, tip, 10).rotateZ(-Math.PI / 2);
+      const per = Math.floor((sp.halfLength * 2) / 0.09);
+      const tips = new THREE.InstancedMesh(cone, spikeMat, per * 2 * 4);
+      const mtx = new THREE.Matrix4();
+      let n = 0;
+      for (const side of [-1, 1]) {
+        for (const z of sp.centres) {
+          const plate = new THREE.Mesh(new THREE.BoxGeometry(plateD, sp.y1 - sp.y0, sp.halfLength * 2), plateMat);
+          plate.position.set(side * (ARENA.half - plateD / 2), (sp.y0 + sp.y1) / 2, z);
+          plate.castShadow = plate.receiveShadow = true;
+          this.eventGroup.add(plate);
+          for (let k = 0; k < per; k++) {
+            for (const y of [sp.y0 + 0.07, sp.y1 - 0.07]) {
+              const zz = z - sp.halfLength + 0.045 + k * 0.09 + (y > 0.2 ? 0.045 : 0);
+              if (zz > z + sp.halfLength) continue;
+              mtx.makeRotationY(side > 0 ? Math.PI : 0).setPosition(side * (ARENA.half - plateD - tip / 2), y, zz);
+              tips.setMatrixAt(n++, mtx);
+            }
+          }
+        }
+      }
+      tips.count = n;
+      this.eventGroup.add(tips);
+    }
     if (m.event === 'sumo') {
       const { radius, height } = ARENA.dais;
       const top = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, height, 72), [

@@ -384,6 +384,14 @@ flipper plates that can't reach the floor, and very high ground clearance.
 - **Out of the arena:** thrown over the wall → out.
 - **Judges' decision** if both survive: aggression, control, damage and style,
   scored from what actually happened in the sim.
+- **Wall spikes** (option, on by default): two hardened-steel spike strips
+  on each side wall (`ARENA.spikes`), 1.8 m long and 0.12 m proud. A hit on
+  one is taken as from a robot's hardened spike (`2 × hitShare`, doubled
+  because the robot takes the whole impact, not half), and steady force on
+  them pierces plate as in the damage model's piercing. They bite aluminium
+  and plastic hard, hardened steel barely; at driving speed against a bare
+  wall a robot takes nothing. Kept off the end walls, where the football
+  goals are.
 - **Referee breaks:** two competitors in contact, both driving, neither moving
   (under 0.2 m/s, not turning), both on the ground, for 5 s: the referee pulls
   them apart to arm's length and stops them dead (`breaks`, on by default).

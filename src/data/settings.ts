@@ -37,6 +37,8 @@ export interface Settings {
   replays: boolean;
   /** What the select screen starts: a fight, sumo or football. */
   event: GameEvent;
+  /** Spike strips on the arena's side walls. */
+  spikes: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -54,6 +56,7 @@ export const DEFAULT_SETTINGS: Settings = {
   voice: 'highlights',
   replays: true,
   event: 'fight',
+  spikes: true,
 };
 
 const KEY = 'robot-bash.settings.v1';

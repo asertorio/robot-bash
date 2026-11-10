@@ -113,6 +113,8 @@ big moments. Settings → Sound and Commentary voice.
   seconds get pulled apart. Robots also slide and bounce off each other the
   way bare plate does, so evenly matched robots come round for another go
   instead of mashing.
+- **Wall spikes:** hardened-steel spike strips on the side walls. Get shoved
+  into them and they bite — aluminium badly, hardened steel hardly at all.
 - **Finale:** in the last 30 seconds the pit opens and the house robots come
   for everyone.
 - **Big hits** get a shout, camera shake and a moment of slow motion.

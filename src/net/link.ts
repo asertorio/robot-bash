@@ -16,7 +16,7 @@ import type { GameEvent } from '../sim/match';
 export type NetMessage =
   | { type: 'hello'; design: RobotDesign }
   | { type: 'lobby'; host: string; guest: string | null }
-  | { type: 'start'; designs: RobotDesign[]; house: RobotDesign[]; duration: number; damageScale: number; breaks: boolean; finale: boolean; event?: GameEvent }
+  | { type: 'start'; designs: RobotDesign[]; house: RobotDesign[]; duration: number; damageScale: number; breaks: boolean; finale: boolean; event?: GameEvent; wallSpikes?: boolean }
   | { type: 'ctl'; c: ControlState }
   | { type: 'state'; s: WireState }
   | { type: 'leave' };

@@ -19,6 +19,14 @@ export const ARENA = {
   /** Grille that belches fire on a cycle. */
   flamePit: { x: 2.6, z: 2.4, half: 0.6, period: 7, burn: 2.2 },
   floorFriction: 1.0,
+  /**
+   * Wall spikes: hardened-steel strips bolted to the side walls (x = ±half),
+   * two each, clear of the corners and the end walls (where football's goals
+   * go). Each is a plate standing `depth` proud of the wall carrying rows of
+   * points; the collider is the plate, the points are what does the damage
+   * (see SPIKES in match.ts).
+   */
+  spikes: { centres: [-1.6, 1.6], halfLength: 0.9, depth: 0.12, y0: 0.05, y1: 0.32 },
   /** Sumo: a raised steel dais in the middle of the floor. Pushed off it, you're out. */
   dais: { radius: 2.3, height: 0.3 },
   /**
@@ -235,6 +243,28 @@ export class Arena {
   isInPit(p: V3): boolean {
     const { pit } = ARENA;
     return this.pitOpen && p.y < -0.2 && Math.abs(p.x - pit.x) < pit.half + 0.2 && Math.abs(p.z - pit.z) < pit.half + 0.2;
+  }
+
+  /** Wall spike strips' colliders (a hit on one is a hit by a spike). */
+  readonly spikeColliders = new Set<number>();
+
+  /** Bolt the spike strips to the side walls. */
+  addSpikes() {
+    const s = ARENA.spikes;
+    const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+    for (const side of [-1, 1]) {
+      for (const z of s.centres) {
+        const c = this.world.createCollider(
+          RAPIER.ColliderDesc.cuboid(s.depth / 2, (s.y1 - s.y0) / 2, s.halfLength)
+            .setTranslation(side * (ARENA.half - s.depth / 2), (s.y0 + s.y1) / 2, z)
+            .setFriction(0.5).setRestitution(0.05).setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Min)
+            .setCollisionGroups(ARENA_GROUPS),
+          body,
+        );
+        this.staticColliders.add(c.handle);
+        this.spikeColliders.add(c.handle);
+      }
+    }
   }
 
   /** Sumo: raise the dais (once). */

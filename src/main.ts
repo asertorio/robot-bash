@@ -201,6 +201,7 @@ class App {
       breaks: st.breaks,
       finale: !background && st.finale,
       event: background ? 'fight' : st.event,
+      wallSpikes: st.spikes,
     };
   }
 
@@ -530,6 +531,7 @@ class App {
       h('div', { class: 'settings' },
         row('Damage', 'damage', [['realistic', 'Realistic'], ['brutal', 'Brutal']], 'Brutal doubles every hit: armour tears off sooner and more fights end in a knockout.'),
         row('Fight length', 'fightLength', [[90, '1:30'], [180, '3:00'], [300, '5:00']], 'How long until the judges decide.'),
+        row('Wall spikes', 'spikes', onOff, 'Hardened-steel spike strips on the side walls. Get shoved into them and they bite — hard into aluminium and plastic, barely into hardened steel.'),
         row('Finale', 'finale', onOff, 'In the last 30 seconds the pit opens and the house robots leave their corners and come for everyone.'),
         row('Referee breaks', 'breaks', onOff, 'Two robots shoving nose to nose and going nowhere for 5 seconds get pulled apart by the referee.'),
         row('House robots', 'houseSet', [['classic', 'Classic'], ['overpowered', 'Overpowered'], ['mixed', 'Mixed']], 'Overpowered: a 1.3 m full-body spinner, a 125 kN hydraulic spike, a giant clamp-lifter and a flame-throwing flipper.'),
@@ -900,7 +902,7 @@ class App {
     net.sentLines = 0;
     net.bigHits = [];
     net.impacts = [];
-    net.link.send({ type: 'start', designs, house: opts.house ?? [], duration: opts.duration ?? 180, damageScale: opts.damageScale ?? 1, breaks: opts.breaks ?? true, finale: opts.finale ?? false, event: opts.event ?? 'fight' });
+    net.link.send({ type: 'start', designs, house: opts.house ?? [], duration: opts.duration ?? 180, damageScale: opts.damageScale ?? 1, breaks: opts.breaks ?? true, finale: opts.finale ?? false, event: opts.event ?? 'fight', wallSpikes: opts.wallSpikes ?? false });
   }
 
   private joinScreen(message = '') {
@@ -957,7 +959,7 @@ class App {
       let designs: RobotDesign[], house: RobotDesign[];
       try { designs = msg.designs.map(checkDesign); house = msg.house.map(checkDesign); } catch (e) { this.netLost(`Couldn't load the host's fight: ${(e as Error).message}`); return; }
       net.prev = net.latest = null;
-      this.beginMatch(designs, ['Remote', 'Human'], false, 0, { duration: msg.duration, house, damageScale: msg.damageScale, breaks: msg.breaks, finale: msg.finale, event: msg.event ?? 'fight' });
+      this.beginMatch(designs, ['Remote', 'Human'], false, 0, { duration: msg.duration, house, damageScale: msg.damageScale, breaks: msg.breaks, finale: msg.finale, event: msg.event ?? 'fight', wallSpikes: msg.wallSpikes ?? false });
     } else if (msg.type === 'state') {
       const m = this.match;
       if (!m || !this.hud) return;
