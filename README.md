@@ -209,6 +209,9 @@ rolling balls, flails…
   flamethrower, a harpoon gun and a gas cannon. Any part on a ram slider can
   be set to fire off the end: pick the cable, winch, spare rounds and reload
   time. Mirror a part to the other side with everything on it.
+- **Share links:** *Copy share link* (Robot & saves tab) packs the robot into
+  a link, about 1,000 characters for a typical robot. Whoever opens it gets
+  the robot in their garage and saved robots.
 
 Stats update as you build: weight, cost, top speed and pushing force, battery
 life, each weapon's force or stored energy and spin-up time, spares and

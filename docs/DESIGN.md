@@ -55,6 +55,11 @@ src/
 
 The **RobotDesign** JSON is the central contract. Templates, the builder, the
 campaign, save files and (later) AI-assisted design all produce RobotDesigns.
+Share links (`src/data/share.ts`) carry one in the URL fragment,
+`#robot=<code>`, where the code is the JSON deflated (raw DEFLATE) and written
+as URL-safe base64; the fragment never reaches the server, so the static site
+needs no backend. Opening a link runs the design through `checkDesign` like
+any other untrusted import.
 
 ## Robot model (design format v2)
 
