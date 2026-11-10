@@ -1,5 +1,8 @@
 import type { HouseSet } from './house';
 
+export type SoundLevel = 'off' | 'quiet' | 'loud';
+export type CommentaryVoice = 'off' | 'highlights' | 'full';
+
 /** Game options, kept in this browser. */
 export interface Settings {
   /** 'brutal' doubles all damage: armour tears sooner, fights end sooner. */
@@ -21,6 +24,14 @@ export interface Settings {
    * 'robot' is the classic RC mix (up = the robot's forward, sideways steers).
    */
   stick: 'point' | 'robot';
+  /** Competitors per fight: 2 (a duel) or 3–4 (a melee). */
+  robots: number;
+  /** Fight camera to start with: the TV gantry view, or behind your robot. V (or a pad's Back) switches mid-fight. */
+  camera: 'tv' | 'chase';
+  /** Fight sounds: motors, spinners, impacts, the crowd. */
+  sound: SoundLevel;
+  /** Spoken commentary: off, big moments only, or everything. */
+  voice: CommentaryVoice;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -32,6 +43,10 @@ export const DEFAULT_SETTINGS: Settings = {
   houseSet: 'classic',
   fightLength: 180,
   stick: 'point',
+  robots: 2,
+  camera: 'tv',
+  sound: 'loud',
+  voice: 'highlights',
 };
 
 const KEY = 'robot-bash.settings.v1';

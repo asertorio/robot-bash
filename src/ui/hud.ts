@@ -39,7 +39,9 @@ export class Hud {
   private flashUntil = -1;
   private finaleShown = false;
 
-  constructor(private match: Match, controllers: string[], onPause?: () => void) {
+  private camBtn: HTMLButtonElement | null = null;
+
+  constructor(private match: Match, controllers: string[], onPause?: () => void, onCamera?: () => void) {
     this.timer = h('div', { class: 'timer' }, '3:00');
     const boxes = match.competitors.map((r, i) => {
       const meta = h('div', { class: 'pmeta' });
@@ -58,16 +60,25 @@ export class Hud {
     // Tab cycles the damage display; tapping this does too (no Tab key on a phone).
     this.help = h('button', { class: 'help', onclick: (e: Event) => { (e.currentTarget as HTMLElement).blur(); this.cycleReport(); } });
     const pause = onPause && h('button', { class: 'small pause', title: 'Pause (Esc, or Start on a pad)', onclick: (e: Event) => { (e.currentTarget as HTMLElement).blur(); onPause(); } }, '❚❚ Pause');
+    this.camBtn = onCamera ? h('button', { class: 'small cam', title: 'Switch camera (V, or Back on a pad)', onclick: (e: Event) => { (e.currentTarget as HTMLElement).blur(); onCamera(); } }, '🎥 TV') : null;
     this.big = h('div', { class: 'big' });
     this.feed = h('div', { class: 'feed' });
     this.tags = match.robots.map((r, i) => i < match.competitors.length
       ? h('div', { class: 'tag', style: `--pc:${PLAYER_COLOURS[i]}` }, `P${i + 1}`)
       : h('div', { class: 'tag house' }, r.design.name));
     this.el = h('div', { class: 'hud' },
-      h('div', { class: 'topbar' }, boxes[0], this.timer, boxes[1]),
+      // A melee stacks players 1 and 3 on the left, 2 and 4 on the right.
+      boxes.length > 2
+        ? h('div', { class: 'topbar melee' }, h('div', { class: 'pcol' }, boxes[0], boxes[2]), this.timer, h('div', { class: 'pcol' }, boxes[1], boxes[3]))
+        : h('div', { class: 'topbar' }, boxes[0], this.timer, boxes[1]),
       this.big, this.feed, ...this.tags,
-      h('div', { class: 'hud-corner' }, this.help, pause));
+      h('div', { class: 'hud-corner' }, this.help, this.camBtn, pause));
     this.applyReportMode();
+  }
+
+  /** Show which camera is on: a robot's name for the chase camera, null for TV. */
+  cameraLabel(robot: string | null) {
+    if (this.camBtn) this.camBtn.textContent = robot ? `🎥 ${robot}` : '🎥 TV';
   }
 
   /** A big hit just landed: shout about it. */

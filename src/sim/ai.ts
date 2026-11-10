@@ -35,6 +35,22 @@ export class CpuDriver {
   /** Which way to curve when backing out of a shoving match (alternates, so it comes round a different side). */
   private flank = 1;
 
+  private foe: Robot | undefined;
+
+  /**
+   * In a melee, who to go for: the nearest robot, but stick with the current
+   * target unless another is a good deal closer — a driver who switches every
+   * time two rivals swap places never gets anything done.
+   */
+  chooseFoe(me: Robot, foes: Robot[]): Robot | undefined {
+    const dist = (r: Robot) => Math.hypot(r.position.x - me.position.x, r.position.z - me.position.z);
+    let best = foes[0];
+    for (const f of foes) if (dist(f) < dist(best)) best = f;
+    const cur = this.foe && foes.includes(this.foe) ? this.foe : undefined;
+    this.foe = cur && best && dist(best) > dist(cur) * 0.6 - 0.3 ? cur : best;
+    return this.foe;
+  }
+
   update(me: Robot, foe: Robot | undefined, pitOpen: boolean, dt: number): ControlState {
     const out: ControlState = { left: 0, right: 0, weapon: false, weapon2: false };
     if (!foe) return out;

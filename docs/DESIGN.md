@@ -48,6 +48,8 @@ src/
     match.ts     Fixed-step loop, rules (count, pit, out of arena, judges)
   input/     Bindings, control profiles, macros, keyboard/gamepad polling
   render/    Three.js scene that mirrors the simulation
+  audio/     Synthesised fight sound and the spoken commentator
+  net/       Online play: the WebRTC link between two devices
   ui/        Menus, HUD, controls editor
 ```
 
@@ -356,6 +358,13 @@ flipper plates that can't reach the floor, and very high ground clearance.
 
 ## Rules (per fight)
 
+- **Duel or melee:** 2 robots, or 3–4 (everyone for themselves, like the
+  first round of a heat). A melee ends when one robot is left; at time the
+  judges score everyone and the highest total wins. CPU drivers go for the
+  nearest rival and stick with it unless another is much closer
+  (`CpuDriver.chooseFoe`); the judges' aggression is towards the nearest
+  rival too. Players 3 and 4 drive with gamepads 3 and 4.
+
 - **Fight length:** 3 minutes (1:30 / 3:00 / 5:00 in Settings).
 - **Immobilisation:** if a robot hasn't moved under its own power for 4 s, the
   referee starts a 10-second count. Being shoved around while helpless doesn't
@@ -455,6 +464,51 @@ use the same operator.
   life. (An optional "invert when flipped" transmitter switch is a candidate
   for later.)
 
+## Camera
+
+The TV gantry camera frames every live competitor. The chase camera sits
+behind one robot, a little zoomed out (≈2.4 m back and 1.4 m up for a
+heavyweight, further for a bigger robot), following the chassis' heading
+eased and rate-limited so a spin doesn't whip it round, and kept inside the
+walls. Settings → Fight camera picks the starting view; V, a pad's Back or
+the camera button cycles TV → behind each robot (humans first). Point-to-drive
+on a touch screen is relative to whichever camera is on.
+
+## Sound and commentary
+
+`src/audio/sound.ts` synthesises everything with Web Audio from what the
+simulation is doing — nothing is scripted or sampled: drive whine from each
+robot's current draw and speed, spinners pitched from rpm (so you hear them
+bog down on a hit), clangs scaled by the impact energies the damage model
+uses (noise plus three inharmonic partials, like struck plate), a hiss when
+gas is spent, chainsaw buzz, flamethrower and flame-pit roar, a crowd that
+swells after big hits and knock-outs, countdown beeps, the activate horn,
+the buzzer and the pit klaxon. Tuning is in `SOUND`.
+
+`src/audio/voice.ts` reads the commentary aloud with the browser's speech
+synthesis (a British voice where there is one): the line-up during the
+countdown, the clock, and either the big moments or every line. It never
+builds a backlog — a line that's waited 2.5 s is dropped, and a major line
+cuts off a minor one. Settings: Sound (loud / quiet / off) and Commentary
+voice (big moments / everything / off).
+
+## Online play
+
+Two devices with the page open: one hosts and shows a four-letter room code,
+the other joins with it. The free public PeerJS server introduces them;
+after that the fight runs over a direct WebRTC data channel (`src/net/link.ts`).
+The host is authoritative: it runs the physics with its own Settings and
+sends 30 snapshots a second (`src/sim/netstate.ts`) — every robot body's
+pose, part conditions and break-offs, battery, gas, actuator speeds, the
+clock, counts, commentary, big hits, impacts and the result, about 2 kB as
+JSON. The guest builds the same Match from the same designs (so its robot
+can be anything, even one from its own garage) but never steps it: it
+copies the snapshots in, blending between the last two, and the renderer,
+HUD and sound read it as usual. The guest sends its controls every frame.
+Nothing pauses online (Esc opens a menu over the fight). Not mirrored yet:
+harpoon cables. `?peer=host:port` points at a local PeerServer for
+development.
+
 ## Physics notes
 
 - **Invertible / inboard wheels:** a robot's own parts don't collide, so
@@ -499,6 +553,8 @@ use the same operator.
    **v0.8:** launchers — a gas cannon (Open class) and a harpoon gun with a
    winch, fired off the end of a ram so the physics sets muzzle speed and
    recoil.
+   **v0.9:** sound, spoken commentary, a chase camera, 3–4 robot melees and
+   online play between two devices.
    *Later:* wall spikes/grinders, house-robot weapons beyond lifters and
    spinners (crusher, flame thrower), and the pit being usable by house robots
    to finish victims.

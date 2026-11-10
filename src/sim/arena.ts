@@ -109,7 +109,8 @@ export class Arena {
   flipperAngle = 0;
   private flipperState: 'ready' | 'rising' | 'holding' | 'lowering' | 'cooldown' = 'ready';
   private flipperTimer = 0;
-  private time = 0;
+  /** Arena clock (s), which runs the flame pit cycle. Public so a network mirror can copy it. */
+  time = 0;
 
   private world: RAPIER.World;
 

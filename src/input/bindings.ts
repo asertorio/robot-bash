@@ -50,6 +50,9 @@ const axis = (pad: number, a: number, dir: 1 | -1): Binding => ({ device: 'padAx
 
 export function defaultProfile(player: number): ControlProfile {
   const pad = player;
+  // Players 3 and 4 (four-robot melees) drive with gamepads 3 and 4 only:
+  // there isn't room on one keyboard for four people.
+  if (player >= 2) return padProfile(pad);
   const keys = player === 0
     ? { f: 'KeyW', b: 'KeyS', l: 'KeyA', r: 'KeyD', w: 'KeyE', w2: 'KeyQ', m: 'KeyC', tank: ['KeyW', 'KeyS', 'KeyR', 'KeyF'] }
     : { f: 'KeyI', b: 'KeyK', l: 'KeyJ', r: 'KeyL', w: 'KeyO', w2: 'KeyU', m: 'KeyM', tank: ['KeyI', 'KeyK', 'KeyP', 'Semicolon'] };
@@ -77,6 +80,21 @@ export function defaultProfile(player: number): ControlProfile {
     macros: [
       { name: 'Fire & back off', trigger: key(keys.m), script: 'weapon 150, back 450' },
     ],
+  };
+}
+
+/** A gamepad-only profile: left stick drives, the face buttons and triggers fire. */
+function padProfile(pad: number): ControlProfile {
+  return {
+    mode: 'arcade',
+    turnRate: 0.7,
+    keyRamp: DEFAULT_KEY_RAMP,
+    bindings: {
+      forward: [axis(pad, 1, -1)], back: [axis(pad, 1, 1)], left: [axis(pad, 0, -1)], right: [axis(pad, 0, 1)],
+      leftForward: [axis(pad, 1, -1)], leftBack: [axis(pad, 1, 1)], rightForward: [axis(pad, 3, -1)], rightBack: [axis(pad, 3, 1)],
+      weapon: [btn(pad, 0), btn(pad, 7)], weapon2: [btn(pad, 1), btn(pad, 6)], weapon3: [btn(pad, 2), btn(pad, 5)], weapon4: [btn(pad, 3), btn(pad, 4)],
+    },
+    macros: [],
   };
 }
 
@@ -138,7 +156,7 @@ export function parseMacro(script: string): MacroStep[] {
 const STORAGE_KEY = 'robot-bash.controls.v1';
 
 export function loadProfiles(): ControlProfile[] {
-  const defaults = [defaultProfile(0), defaultProfile(1)];
+  const defaults = [0, 1, 2, 3].map(defaultProfile);
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaults;

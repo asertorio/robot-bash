@@ -127,6 +127,8 @@ export class Match {
   /** Current referee count per robot (seconds), or null when not counting. */
   counts: Array<number | null>;
   eliminated: Array<string | null>;
+  /** Competitors in the order they went out (first out first). */
+  outOrder: number[] = [];
 
   private events = new RAPIER.EventQueue(true);
   private acc = 0;
@@ -151,6 +153,7 @@ export class Match {
   private locked = new Map<string, number>();
   private lastCutSay = new Map<string, number>();
   private lastBigSay = -99;
+  private lastStanding = Infinity;
 
   constructor(designs: RobotDesign[], opts: MatchOptions = {}) {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -542,7 +545,14 @@ export class Match {
       // Judges' notes.
       const t = this.tally[i];
       if (selfMoving) t.control += dt;
-      const opp = this.competitors.find((_, j) => j !== i && !this.eliminated[j]);
+      // The nearest rival is the one you're going for (in a melee there are several).
+      let opp: Robot | undefined;
+      let od = Infinity;
+      this.competitors.forEach((o, j) => {
+        if (j === i || this.eliminated[j]) return;
+        const dd = Math.hypot(o.position.x - pos.x, o.position.z - pos.z);
+        if (dd < od) { od = dd; opp = o; }
+      });
       if (opp) {
         const to = vsub(opp.position, pos);
         const d = vlen(to);
@@ -552,12 +562,20 @@ export class Match {
       }
     });
 
+    // A melee: say how many are left (once, however many went out this check).
+    const standing = alive().length;
+    if (this.competitors.length > 2 && standing < this.lastStanding && this.lastStanding !== Infinity && standing >= 2) this.say(standing === 2 ? 'Down to the last two!' : `${standing} robots left in the arena!`, 'info');
+    this.lastStanding = standing;
+
     if (this.phase === 'fight' && !this.sandbox) {
       const left = alive();
       if (left.length <= 1 && this.competitors.length > 1) {
         const winner = left[0];
-        const loser = this.competitors.find((_, i) => this.eliminated[i]);
-        const reason = loser ? `${loser.design.name} went ${this.eliminated[loser.index]}` : '';
+        // The last one out is the story (in a melee, the earlier ones are history).
+        const loser = this.competitors[this.outOrder[this.outOrder.length - 1]];
+        const reason = !loser ? ''
+          : this.competitors.length > 2 ? `Last robot standing — ${loser.design.name} went ${this.eliminated[loser.index]}`
+          : `${loser.design.name} went ${this.eliminated[loser.index]}`;
         this.finish({ winner: winner ? winner.index : null, reason });
       } else if (this.time >= this.duration) {
         this.judge();
@@ -660,6 +678,7 @@ export class Match {
   private eliminate(i: number, how: string) {
     if (this.eliminated[i]) return;
     this.eliminated[i] = how;
+    this.outOrder.push(i);
     this.counts[i] = null;
     const name = this.robots[i].design.name;
     const line = how === 'immobilised' ? `${name} is immobilised! …8, 9, 10 — out!` : `${name} is ${how}!`;

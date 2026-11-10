@@ -305,3 +305,18 @@ body.touch .hud .hud-corner { bottom: auto; top: 76px; right: 50%; transform: tr
   body.touch .hud .feed { bottom: 12px; left: 50%; width: min(360px, 40vw); }
   .touch-stick { width: 130px; height: 130px; }
 }
+
+/* Melee: three or four robot cards side by side. */
+.robot-card.compact { width: min(260px, 100%); padding: 12px; }
+.robot-card.compact .desc { font-size: 12px; max-height: 4.2em; overflow: hidden; }
+.robot-card.compact .stats { font-size: 11px; }
+.robot-card.compact .name { font-size: 18px; }
+.hud .topbar.melee .pcol { display: flex; flex-direction: column; gap: 6px; }
+.hud .topbar.melee .pcol:last-child { align-items: flex-end; }
+.hud .topbar.melee .pbox { padding: 5px 9px; min-width: 170px; font-size: 12px; }
+.hud .topbar.melee .pbox .diagram { width: 64px !important; height: 64px !important; }
+
+/* Online lobby */
+.room-code { font-family: var(--display); font-size: clamp(56px, 14vw, 120px); letter-spacing: 0.25em; color: var(--hazard); text-align: center; margin: 4px 0 6px; padding-left: 0.25em; }
+input.code-input { font-family: var(--display); font-size: 32px; letter-spacing: 0.3em; width: 6.5em; text-transform: uppercase; text-align: center; }
+.screen .house-row select.robot-pick { max-width: 70vw; }

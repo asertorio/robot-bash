@@ -35,8 +35,13 @@ export class MatchView {
   private flamePositions = new Float32Array(400 * 3);
   private camTarget = new THREE.Vector3(0, 0, 0);
   private camPos = new THREE.Vector3(0, 12, 14);
-  /** 'tv' frames the fight; 'follow' orbits one robot (garage test bay). */
-  cameraMode: 'tv' | 'follow' = 'tv';
+  /**
+   * 'tv' frames the fight; 'follow' orbits one robot (garage test bay);
+   * 'chase' sits a little behind and above one robot, looking where it's going.
+   */
+  cameraMode: 'tv' | 'follow' | 'chase' = 'tv';
+  /** Chase camera's heading (world yaw), smoothed so a spin doesn't whip it round. */
+  private chaseYaw = 0;
   followIndex = 0;
   private orbit = { yaw: 0.6, pitch: 0.55, dist: 3.2 };
   private snapCamera = false;
@@ -593,6 +598,17 @@ export class MatchView {
     this.flames.geometry.attributes.position.needsUpdate = true;
   }
 
+  /** Put the chase camera behind robot `index`, already facing its way. */
+  startChase(index: number) {
+    this.cameraMode = 'chase';
+    this.followIndex = index;
+    const r = this.match?.robots[index];
+    if (!r) return;
+    const q = r.rotation;
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(new THREE.Quaternion(q.x, q.y, q.z, q.w));
+    this.chaseYaw = Math.atan2(fwd.x, fwd.z);
+  }
+
   /** Shake the camera (0..1), e.g. for a big hit. */
   shake(amount: number) {
     this.shakeAmount = Math.min(1, Math.max(this.shakeAmount, amount));
@@ -622,7 +638,45 @@ export class MatchView {
       }
       return;
     }
+    if (this.cameraMode === 'chase' && m.robots[this.followIndex]) {
+      this.chaseCamera(m.robots[this.followIndex], dt);
+      return;
+    }
     this.tvCamera(m, dt);
+  }
+
+  /**
+   * Behind the robot, a bit zoomed out: about 2.4 m back and 1.4 m up for a
+   * heavyweight, further for a big robot, looking at a point just ahead of it.
+   * The heading follows the chassis' forward (+Z) on the floor, eased, and
+   * rate-limited so a thwackbot or a spinner's torque reaction doesn't whip
+   * the camera about. The camera stays inside the walls.
+   */
+  private chaseCamera(r: Robot, dt: number) {
+    const p = r.position;
+    const q = r.rotation;
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(new THREE.Quaternion(q.x, q.y, q.z, q.w));
+    const flat = Math.hypot(fwd.x, fwd.z);
+    if (flat > 0.2) {
+      const want = Math.atan2(fwd.x, fwd.z);
+      let d = want - this.chaseYaw;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      const step = d * (1 - Math.exp(-dt * 3.2));
+      this.chaseYaw += Math.max(-dt * 3.5, Math.min(dt * 3.5, step));
+    }
+    const reach = Math.max(0.6, ...r.parts.map((pt) => pt.visual ? Math.hypot(pt.visual.pos.x, pt.visual.pos.z) : 0).slice(0, 40));
+    const back = 1.9 + reach * 1.1, up = 1.0 + reach * 0.7;
+    const dir = new THREE.Vector3(Math.sin(this.chaseYaw), 0, Math.cos(this.chaseYaw));
+    const target = new THREE.Vector3(p.x, Math.max(0, p.y) + 0.2, p.z).addScaledVector(dir, 0.9);
+    const want = new THREE.Vector3(p.x, Math.max(0, p.y) + up, p.z).addScaledVector(dir, -back);
+    const lim = ARENA.half - 0.15;
+    want.x = Math.max(-lim, Math.min(lim, want.x));
+    want.z = Math.max(-lim, Math.min(lim, want.z));
+    const k = this.snapCamera ? 1 : 1 - Math.exp(-dt * 6);
+    this.camTarget.lerp(target, k);
+    this.camPos.lerp(want, k);
+    this.camera.position.copy(this.camPos);
+    this.camera.lookAt(this.camTarget);
   }
 
   private tvCamera(m: Match, dt: number) {
