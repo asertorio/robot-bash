@@ -48,11 +48,18 @@ src/
     match.ts     Fixed-step loop, rules (count, pit, out of arena, judges)
   input/     Bindings, control profiles, macros, keyboard/gamepad polling
   render/    Three.js scene that mirrors the simulation
+  audio/     Synthesised fight sound and the spoken commentator
+  net/       Online play: the WebRTC link between two devices
   ui/        Menus, HUD, controls editor
 ```
 
 The **RobotDesign** JSON is the central contract. Templates, the builder, the
 campaign, save files and (later) AI-assisted design all produce RobotDesigns.
+Share links (`src/data/share.ts`) carry one in the URL fragment,
+`#robot=<code>`, where the code is the JSON deflated (raw DEFLATE) and written
+as URL-safe base64; the fragment never reaches the server, so the static site
+needs no backend. Opening a link runs the design through `checkDesign` like
+any other untrusted import.
 
 ## Robot model (design format v2)
 
@@ -354,7 +361,34 @@ flamethrowers are; a harpoon on a cable is allowed everywhere.
 Warnings cover a battery that won't last 3 minutes, battery-limited pushing,
 flipper plates that can't reach the floor, and very high ground clearance.
 
+**The weigh-in** (`src/ui/scrutineering.ts`): before a fight with one of
+your own builds, and always before a championship or a career week, each
+robot goes on the scales (a dial against the class limit), then its
+footprint against the arena doors, its cost against any budget, and the
+scrutineers' list. A failed robot can still fight an exhibition bout in an
+ordinary fight; in a competition it has to be fixed (straight to the garage).
+
+## Career
+
+`src/data/career.ts`: a season of `CAREER.weeks` (5) weekly championships,
+the last the Grand Final, saved in the browser. Prize money: champion
+£6,000, runner-up £3,000, semi-final £1,500, quarter-final £500. The team
+budget is £3,500 plus everything won, and the robot entered must cost no
+more (checked at the weigh-in with a budget rule). That's what buys
+upgrades: a dearer starter, or your own build improved in the garage.
+£3,500 covers 12 of the 28 starters (Whippet £2,159 … Whisk £3,483). Each
+week's field is drawn from robots costing up to £2,900 + £550 × week, so
+the opposition gets richer. Giving up a week costs nothing; you can enter
+it again.
+
 ## Rules (per fight)
+
+- **Duel or melee:** 2 robots, or 3–4 (everyone for themselves, like the
+  first round of a heat). A melee ends when one robot is left; at time the
+  judges score everyone and the highest total wins. CPU drivers go for the
+  nearest rival and stick with it unless another is much closer
+  (`CpuDriver.chooseFoe`); the judges' aggression is towards the nearest
+  rival too. Players 3 and 4 drive with gamepads 3 and 4.
 
 - **Fight length:** 3 minutes (1:30 / 3:00 / 5:00 in Settings).
 - **Immobilisation:** if a robot hasn't moved under its own power for 4 s, the
@@ -370,6 +404,14 @@ flipper plates that can't reach the floor, and very high ground clearance.
 - **Out of the arena:** thrown over the wall → out.
 - **Judges' decision** if both survive: aggression, control, damage and style,
   scored from what actually happened in the sim.
+- **Wall spikes** (option, on by default): two hardened-steel spike strips
+  on each side wall (`ARENA.spikes`), 1.8 m long and 0.12 m proud. A hit on
+  one is taken as from a robot's hardened spike (`2 × hitShare`, doubled
+  because the robot takes the whole impact, not half), and steady force on
+  them pierces plate as in the damage model's piercing. They bite aluminium
+  and plastic hard, hardened steel barely; at driving speed against a bare
+  wall a robot takes nothing. Kept off the end walls, where the football
+  goals are.
 - **Referee breaks:** two competitors in contact, both driving, neither moving
   (under 0.2 m/s, not turning), both on the ground, for 5 s: the referee pulls
   them apart to arm's length and stops them dead (`breaks`, on by default).
@@ -455,6 +497,115 @@ use the same operator.
   life. (An optional "invert when flipped" transmitter switch is a candidate
   for later.)
 
+## Championship
+
+Eight robots (you plus seven random starters), a random draw, and a
+knockout: quarter-finals, semi-finals, the final. `src/sim/tournament.ts`
+has the rules, `src/ui/championship.ts` the bracket.
+
+- **Damage carries over.** After a bout each robot's part conditions are
+  kept (`wearOf`: anything that came off or failed is 0) and the next bout
+  starts from them (`MatchOptions.wear`). A part at 0 fails as the fight
+  starts: it's missing, or dead. Batteries are charged and gas refilled.
+- **The pit:** `PIT.minutes` (60) between rounds. Fixing a part takes its
+  catalogue swap time × how damaged it is (a wreck takes the full time; plate
+  25 min, electronics 15), × 1.2 for getting at it. You choose; CPU crews fix
+  what stops the robot first (radio, battery, wheels, weapon), then the worst
+  armour (`cpuRepairs`), and the crew's choice is pre-ticked for you.
+- **Other bouts are fought for real**, by two CPU drivers in an ordinary
+  Match, on Web Workers (`src/workers/`), one per spare core up to three, as
+  soon as their round begins, so they're usually done by the time you are.
+  A 30 s bout costs about 3.7 s of one core. A dead-level draw goes to a
+  coin toss. Without workers they run on the page.
+
+## Side events
+
+Chosen on the select screen (Event: Fight / Sumo / Football); the rules
+are `GameEvent` in `src/sim/match.ts`, the geometry `ARENA.dais` and
+`ARENA.football` in `src/sim/arena.ts`.
+
+- **Sumo:** a fixed steel cylinder 2.3 m in radius and 0.3 m high in the
+  middle of the floor; robots start on it in a ring, facing in. A robot
+  whose chassis is past the edge and below the top is out ("off the
+  dais"); the usual count, pit and judges still apply. The CPU heads back
+  to the middle when it's near the edge with its foe further in, and never
+  reverses out of a shove within 0.9 m of the edge.
+- **Football:** a 1.6 kg, 0.22 m hollow plastic ball (restitution 0.55,
+  some rolling resistance) and a goal mouth 2.2 m wide against each end
+  wall. A goal is the ball's centre within 0.5 m of the end wall between the
+  posts; the ball then goes back to the centre (as it does if it's lost in
+  the pit or out of the arena). First to 3, else most goals at full time,
+  else a draw. In a melee P1 and P3 are red (defending −z), P2 and P4 blue.
+  The ball is debris for collisions, so kicking it does no damage. The CPU
+  gets behind the ball, on the far side from the goal it's attacking, and
+  drives through it (`footballAim`); from the wrong side it goes round.
+
+- **Gauntlet:** a race from the −z end to a chequered line at z = 4.9
+  through a chicane of two 0.32 m steel barriers (the first gap on the −x
+  side, past the floor flipper; the second on the +x side, past the flame
+  pit), with six loose 14 kg plywood crates (debris for collisions) in front
+  of the second gap. First over the line wins; at time, whoever got furthest
+  up the course; fighting allowed. The CPU follows the gaps (`gauntletAim`)
+  and runs it in about 9 s.
+
+## Camera
+
+The TV gantry camera frames every live competitor. The chase camera sits
+behind one robot, a little zoomed out (≈3.2 m back and 1.7 m up for a
+heavyweight, further for a bigger robot), following the chassis' heading
+eased and rate-limited so a spin doesn't whip it round; near a wall it
+hangs out over the (low) wall and rises to look over it. Settings → Fight camera picks the starting view; V, a pad's Back or
+the camera button cycles TV → behind each robot (humans first). Point-to-drive
+on a touch screen is relative to whichever camera is on.
+
+## Action replays
+
+Before the result, the moment worth seeing again plays back at 0.4× from a
+low camera circling the action: a robot going into the pit or over the
+wall (the last 4 s, following it), otherwise the fight's biggest hit (2.2 s
+before to 1.4 s after). `src/render/replay.ts` records every part's world
+pose 30 times a second of match time for the last 10 s; playback only
+changes what's drawn (the view takes poses from the frame, not the bodies),
+so the simulation is never touched, and a part that has since come off is
+shown still bolted on. Sparks and clangs come round again with the hits.
+Rams, motors and spinner blur are hidden during a replay (they follow the
+live bodies). Any key or a tap skips. Settings → Action replays.
+
+## Sound and commentary
+
+`src/audio/sound.ts` synthesises everything with Web Audio from what the
+simulation is doing — nothing is scripted or sampled: drive whine from each
+robot's current draw and speed, spinners pitched from rpm (so you hear them
+bog down on a hit), clangs scaled by the impact energies the damage model
+uses (noise plus three inharmonic partials, like struck plate), a hiss when
+gas is spent, chainsaw buzz, flamethrower and flame-pit roar, a crowd that
+swells after big hits and knock-outs, countdown beeps, the activate horn,
+the buzzer and the pit klaxon. Tuning is in `SOUND`.
+
+`src/audio/voice.ts` reads the commentary aloud with the browser's speech
+synthesis (a British voice where there is one): the line-up during the
+countdown, the clock, and either the big moments or every line. It never
+builds a backlog — a line that's waited 2.5 s is dropped, and a major line
+cuts off a minor one. Settings: Sound (loud / quiet / off) and Commentary
+voice (big moments / everything / off).
+
+## Online play
+
+Two devices with the page open: one hosts and shows a four-letter room code,
+the other joins with it. The free public PeerJS server introduces them;
+after that the fight runs over a direct WebRTC data channel (`src/net/link.ts`).
+The host is authoritative: it runs the physics with its own Settings and
+sends 30 snapshots a second (`src/sim/netstate.ts`) — every robot body's
+pose, part conditions and break-offs, battery, gas, actuator speeds, the
+clock, counts, commentary, big hits, impacts and the result, about 2 kB as
+JSON. The guest builds the same Match from the same designs (so its robot
+can be anything, even one from its own garage) but never steps it: it
+copies the snapshots in, blending between the last two, and the renderer,
+HUD and sound read it as usual. The guest sends its controls every frame.
+Nothing pauses online (Esc opens a menu over the fight). Not mirrored yet:
+harpoon cables. `?peer=host:port` points at a local PeerServer for
+development.
+
 ## Physics notes
 
 - **Invertible / inboard wheels:** a robot's own parts don't collide, so
@@ -498,13 +649,22 @@ use the same operator.
    overpowered or mixed is chosen on the select screen or in Settings.
    **v0.8:** launchers — a gas cannon (Open class) and a harpoon gun with a
    winch, fired off the end of a ram so the physics sets muzzle speed and
-   recoil.
+   recoil. Eight more starters (`src/data/workshop.ts`), each a different way
+   to fight: a shell spinner (Bellringer), an eggbeater (Whisk), flippers at
+   both ends of an invertible body (Flipflop), a 43 kg LiPo dart (Whippet), a
+   ram-swung horizontal hammer (Haymaker), a flail spinner on ball joints
+   (Conker), a round 360° cone plough (Limpet) and a pair of servo hugging
+   arms (Bearhug).
+   **v0.9:** sound, spoken commentary, a chase camera, 3–4 robot melees and
+   online play between two devices.
    *Later:* wall spikes/grinders, house-robot weapons beyond lifters and
    spinners (crusher, flame thrower), and the pit being usable by house robots
    to finish victims.
-5. **Tournament:** heats → final, side events (sumo, pinball, football,
-   gauntlet, trials), pit repairs limited by time, budget and spares.
-6. **Campaign:** progression and unlocks; restricted weapons (fire, etc.) in
+5. **Tournament:** a championship knockout with pit repairs is done (v0.9);
+   series of heats → final, side events (sumo, football and the gauntlet done
+   in v0.9; pinball, gauntlet, trials to come), pit repairs limited by time, budget and spares.
+6. **Campaign:** a five-week career with prize money and a budget is done
+   (v0.9); more progression and unlocks; restricted weapons (fire, etc.) in
    special classes.
 7. **Full freedom:** AI-assisted design from a description or sketch (a model
    emits a RobotDesign). Free-form shapes and materials are done (v0.4).

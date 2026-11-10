@@ -1123,6 +1123,14 @@ export class Robot {
     }
   }
 
+  /**
+   * A network mirror (sim/netstate.ts) copying the host's robot: break a part
+   * away the same way the host did, so both sides have the same bodies.
+   */
+  mirrorDetach(p: Part) {
+    this.detach(p);
+  }
+
   /** Break a part away so it becomes loose debris. Returns false if it was already gone. */
   private detach(p: Part): boolean {
     if (p.detached) return false;

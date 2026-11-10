@@ -1,4 +1,8 @@
 import type { HouseSet } from './house';
+import type { GameEvent } from '../sim/match';
+
+export type SoundLevel = 'off' | 'quiet' | 'loud';
+export type CommentaryVoice = 'off' | 'highlights' | 'full';
 
 /** Game options, kept in this browser. */
 export interface Settings {
@@ -21,6 +25,20 @@ export interface Settings {
    * 'robot' is the classic RC mix (up = the robot's forward, sideways steers).
    */
   stick: 'point' | 'robot';
+  /** Competitors per fight: 2 (a duel) or 3–4 (a melee). */
+  robots: number;
+  /** Fight camera to start with: the TV gantry view, or behind your robot. V (or a pad's Back) switches mid-fight. */
+  camera: 'tv' | 'chase';
+  /** Fight sounds: motors, spinners, impacts, the crowd. */
+  sound: SoundLevel;
+  /** Spoken commentary: off, big moments only, or everything. */
+  voice: CommentaryVoice;
+  /** An action replay of the knockout or the biggest hit before the result. */
+  replays: boolean;
+  /** What the select screen starts: a fight, sumo or football. */
+  event: GameEvent;
+  /** Spike strips on the arena's side walls. */
+  spikes: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -32,6 +50,13 @@ export const DEFAULT_SETTINGS: Settings = {
   houseSet: 'classic',
   fightLength: 180,
   stick: 'point',
+  robots: 2,
+  camera: 'tv',
+  sound: 'loud',
+  voice: 'highlights',
+  replays: true,
+  event: 'fight',
+  spikes: true,
 };
 
 const KEY = 'robot-bash.settings.v1';

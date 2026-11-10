@@ -23,6 +23,53 @@ export function steerTo(me: Robot, target: V3, maxThrottle = 1): { left: number;
 }
 
 /**
+ * Sumo: chase the foe, except near the edge of the dais with the foe further
+ * in — then head back towards the middle rather than get shoved off.
+ */
+export function sumoAim(me: Robot, foe: Robot | undefined, radius: number): V3 | null {
+  const d = Math.hypot(me.position.x, me.position.z);
+  const fd = foe ? Math.hypot(foe.position.x, foe.position.z) : 0;
+  if (d > radius - 0.6 && (!foe || fd < d + 0.2)) return { x: 0, y: me.position.y, z: 0 };
+  return null;
+}
+
+/** Sumo: near enough the edge that backing out of a shove would go over it. */
+export const nearDaisEdge = (me: Robot, radius: number): boolean => Math.hypot(me.position.x, me.position.z) > radius - 0.9;
+
+/**
+ * Gauntlet: through the first gap (−x side), across to the second (+x side,
+ * through the crates), then straight for the line. Aim just past each gap so
+ * the robot doesn't stop in it.
+ */
+export function gauntletAim(me: Robot): V3 {
+  const [b1, b2] = ARENA.gauntlet.barriers;
+  const z = me.position.z;
+  if (z < b1.z + 0.3) return { x: (b1.x0 - ARENA.half) / 2, y: 0, z: b1.z + 0.8 };
+  if (z < b2.z + 0.3) return { x: (b2.x1 + ARENA.half) / 2, y: 0, z: b2.z + 0.8 };
+  return { x: me.position.x * 0.5, y: 0, z: ARENA.half };
+}
+
+/**
+ * Football: get behind the ball (on the far side from the goal you're
+ * attacking) and drive through it. Coming from the wrong side, go round it
+ * on whichever side you're already on, rather than knocking it back.
+ */
+export function footballAim(me: Robot, ball: V3, goal: V3): V3 {
+  const toGoal = vsub({ x: goal.x, y: 0, z: goal.z }, { x: ball.x, y: 0, z: ball.z });
+  const dir = vscale(toGoal, 1 / (vlen(toGoal) || 1));
+  const rel = vsub({ x: me.position.x, y: 0, z: me.position.z }, { x: ball.x, y: 0, z: ball.z });
+  const along = vdot(rel, dir);
+  const side = { x: -dir.z, y: 0, z: dir.x };
+  const across = vdot(rel, side);
+  // Behind the ball and lined up: drive through it.
+  if (along < -0.25 && Math.abs(across) < 0.35 + -along * 0.25) return vadd(ball, vscale(dir, 0.6));
+  // Goal side of the ball: go round it.
+  if (along > -0.25) return vadd(vadd(ball, vscale(side, across >= 0 ? 0.9 : -0.9)), vscale(dir, -0.5));
+  // Otherwise get to the point behind it.
+  return vsub(ball, vscale(dir, 0.75));
+}
+
+/**
  * A simple CPU driver: chase, line up, use the weapon, don't drive into the
  * pit, back off when stuck. It drives through the same ControlState a human
  * does, so it is bound by the same physics.
@@ -35,13 +82,34 @@ export class CpuDriver {
   /** Which way to curve when backing out of a shoving match (alternates, so it comes round a different side). */
   private flank = 1;
 
-  update(me: Robot, foe: Robot | undefined, pitOpen: boolean, dt: number): ControlState {
+  private foe: Robot | undefined;
+
+  /**
+   * In a melee, who to go for: the nearest robot, but stick with the current
+   * target unless another is a good deal closer — a driver who switches every
+   * time two rivals swap places never gets anything done.
+   */
+  chooseFoe(me: Robot, foes: Robot[]): Robot | undefined {
+    const dist = (r: Robot) => Math.hypot(r.position.x - me.position.x, r.position.z - me.position.z);
+    let best = foes[0];
+    for (const f of foes) if (dist(f) < dist(best)) best = f;
+    const cur = this.foe && foes.includes(this.foe) ? this.foe : undefined;
+    this.foe = cur && best && dist(best) > dist(cur) * 0.6 - 0.3 ? cur : best;
+    return this.foe;
+  }
+
+  /**
+   * `aim` drives somewhere other than at the foe (a side event's tactics:
+   * see sumoAim, footballAim); `noReverse` stops it backing out of a shove
+   * (on the edge of the sumo dais that's suicide).
+   */
+  update(me: Robot, foe: Robot | undefined, pitOpen: boolean, dt: number, opts: { aim?: V3 | null; noReverse?: boolean } = {}): ControlState {
     const out: ControlState = { left: 0, right: 0, weapon: false, weapon2: false };
-    if (!foe) return out;
+    if (!foe && !opts.aim) return out;
     this.dt = dt;
 
     // Where is the target, in my own frame? (+z ahead, +x to my left.)
-    const target = foe.position;
+    const target = opts.aim ?? foe!.position;
     const inverted = me.uprightness < 0;
     const rel = qrotate(qconj(me.rotation), vsub(target, me.position));
     if (inverted) rel.x = -rel.x;
@@ -60,6 +128,7 @@ export class CpuDriver {
     // Unstick: pushing but going nowhere → reverse out for a moment.
     const v = me.chassis.linvel();
     const speed = Math.hypot(v.x, v.z);
+    if (opts.noReverse) this.reverseFor = 0;
     if (this.reverseFor > 0) {
       this.reverseFor -= dt;
       out.left = this.flank > 0 ? -0.9 : -0.35;
@@ -76,7 +145,7 @@ export class CpuDriver {
     }
 
     // A thwackbot's weapon is turning: close in, then spin on the spot.
-    if (me.design.style === 'thwack' && dist < 1.5) {
+    if (me.design.style === 'thwack' && dist < 1.5 && !opts.aim) {
       out.left = 1;
       out.right = -1;
       if (inverted) [out.left, out.right] = [-out.right, -out.left];
@@ -93,8 +162,8 @@ export class CpuDriver {
     return this.weapons(me, foe, out);
   }
 
-  private weapons(me: Robot, foe: Robot, out: ControlState): ControlState {
-    return this.arms.update(me, [foe], out, this.dt, { selfRight: true });
+  private weapons(me: Robot, foe: Robot | undefined, out: ControlState): ControlState {
+    return this.arms.update(me, foe ? [foe] : [], out, this.dt, { selfRight: true });
   }
 }
 

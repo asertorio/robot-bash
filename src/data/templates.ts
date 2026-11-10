@@ -5,6 +5,7 @@ import { EXAMPLES } from './examples';
 import { ROSTER } from './roster';
 import { ARSENAL } from './arsenal';
 import { BOMBARD, WHALER } from './launchers';
+import { WORKSHOP } from './workshop';
 
 /**
  * Starter robots. Original designs in the style of classic heavyweights
@@ -135,7 +136,7 @@ export const WHIRLWIND: RobotDesign = reshape(fromV1({
   'spinner-0': { shape: bladeBar(0.62, 0.1, 0.025) },
 });
 
-export const TEMPLATES: RobotDesign[] = [WEDGEHOG, FLIPSIDE, WHIRLWIND, ...EXAMPLES, ...ROSTER, ...ARSENAL, WHALER];
+export const TEMPLATES: RobotDesign[] = [WEDGEHOG, FLIPSIDE, WHIRLWIND, ...EXAMPLES, ...ROSTER, ...ARSENAL, WHALER, ...WORKSHOP];
 
 /** Built-in robots legal only in the Open class (banned weapons): fightable, but not heavyweights. */
 export const OPEN_CLASS: RobotDesign[] = [BOMBARD];

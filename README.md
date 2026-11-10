@@ -8,10 +8,11 @@ landings shake batteries and speed controllers loose, and a robot loses
 because something actually broke.
 
 **[Play it in your browser](https://asertorio.github.io/robot-bash/)** — no
-install. Keyboard, gamepad or touch screen; two players on one machine, or you
-against the CPU.
+install. Keyboard, gamepad or touch screen; two players on one machine (four
+with gamepads), you against the CPU, or **two phones online** with a room code.
 
-**Status: v0.7.** Fights in a hazard-filled arena, nineteen starter robots
+**Status: v0.9.** One-on-one fights or 3–4 robot melees in a hazard-filled
+arena, with synthesised sound and a spoken commentator, twenty-eight starter robots
 plus eight house robots to pick from, a CPU opponent that uses its weapons
 properly, and the **Garage**, where you build anything out of parts, joints
 and actuators and drive it in a test bay. Tournaments come next. See [docs/DESIGN.md](docs/DESIGN.md) for how the simulation works and
@@ -24,7 +25,8 @@ npm install
 npm run dev        # then open the printed localhost URL
 ```
 
-Everything runs in the browser; there's no server.
+Everything runs in the browser; there's no game server (online play uses the
+free PeerJS server only to introduce the two devices).
 
 | | Player 1 | Player 2 |
 |---|---|---|
@@ -35,6 +37,8 @@ Everything runs in the browser; there's no server.
 | Macro ("fire & back off") | `C` | `M` |
 | Gamepad | Pad 1: left stick, A/RT, B/LT | Pad 2 |
 
+`V`, a pad's Back or the 🎥 button switches between the TV camera and a chase
+camera behind each robot (Settings → Fight camera picks the default).
 `Esc`, the on-screen Pause button or a pad's Start pauses. Menus work with
 the keyboard (`Tab`, `Enter`, `Space`) or a gamepad (D-pad to move, A to
 pick, B to go back, Start to fight). `Tab` in a fight cycles the damage display: a small plan view of each
@@ -55,6 +59,41 @@ be changed under **Controls**: rebind any key, button or stick (it warns you
 if one key ends up doing two things), switch to tank
 mixing (one control per side, like a two-stick transmitter), adjust steering
 and the key ramp, and write macros such as `weapon 150, back+left 300`.
+
+**Melees:** choose *3-way* or *4-way* on the select screen. Everyone's for
+themselves, like the first round of a heat: last robot standing wins, or the
+judges score everyone. Players 3 and 4 drive with gamepads 3 and 4; any seat
+can be the CPU, which goes for whoever's nearest.
+
+**Championship:** eight robots, a knockout to the final. Damage carries
+over, and between rounds you get 60 minutes in the pit — each part takes its
+real swap time to fix, so choose. The other bouts are fought for real, in the
+background, while you fight yours.
+
+**Career:** a five-week season of championships ending in the Grand Final.
+Prize money raises your team budget, and your robot must cost no more than
+it — so winning buys upgrades. Every competition starts with a weigh-in and
+the scrutineers' checks (so does any fight with one of your own builds).
+
+**Side events:** *Sumo* (shove them off a raised steel dais) and *Football*
+(a real ball and a goal at each end; first to three, and in a 4-way it's
+P1 + P3 against P2 + P4) and the *Gauntlet* (race through a chicane, past the
+hazards and through a pile of crates to the chequered line — with the house
+robots after you). Pick the event on the select screen.
+
+**Action replays:** a knockout into the pit or over the wall, or the
+fight's biggest hit, plays again in slow motion before the result.
+
+**Online:** *Play online* on the main menu. One device hosts and shows a
+four-letter code; the other joins with it and picks any robot, even one from
+its own garage. The host's device runs the physics with its own Settings and
+streams the fight to the other. Same Wi-Fi or anywhere online.
+
+**Sound and commentary:** motors whine with the current they draw, spinners
+howl at their real rpm and bog down when they hit, impacts clang as hard as
+the physics says, rams hiss, and the crowd roars at big hits. A spoken
+commentator (your browser's own voice) calls the line-up, the clock and the
+big moments. Settings → Sound and Commentary voice.
 
 ## How you win
 
@@ -81,11 +120,14 @@ and the key ramp, and write macros such as `weapon 150, back+left 300`.
   seconds get pulled apart. Robots also slide and bounce off each other the
   way bare plate does, so evenly matched robots come round for another go
   instead of mashing.
+- **Wall spikes:** hardened-steel spike strips on the side walls. Get shoved
+  into them and they bite — aluminium badly, hardened steel hardly at all.
 - **Finale:** in the last 30 seconds the pit opens and the house robots come
   for everyone.
 - **Big hits** get a shout, camera shake and a moment of slow motion.
 - **Settings** (main menu): Realistic or Brutal damage, fight length, finale,
-  referee breaks, house robot set, slow motion and camera shake.
+  referee breaks, house robot set, sound, commentary voice, slow motion,
+  camera shake and the fight camera.
 
 ## What hits do
 
@@ -133,6 +175,14 @@ listed too.
 | Gemini | Twin counter-rotating saw discs | 76 kg |
 | Vicegrip | Hydraulic crusher, no gas, unlimited bites | 86 kg |
 | Whaler | Harpoon on 6 m of cable, and a winch to drag what it hits | 94 kg |
+| Bellringer | Shell spinner: a bell spinning round the body, skirt 25 mm off the floor | 83 kg |
+| Whisk | Eggbeater: a hollow cage of hardened bars, 2,800 rpm | 89 kg |
+| Flipflop | Invertible, with flippers at both ends | 74 kg |
+| Whippet | None — a tiny, very low wedge, the fastest robot here | 43 kg |
+| Haymaker | Spiked arm that swings sideways across the nose | 83 kg |
+| Conker | Flail spinner: spiked balls on chains | 84 kg |
+| Limpet | None — a round titanium cone, a wedge on every side | 66 kg |
+| Bearhug | Two arms that swing in, grab and hold on | 97 kg |
 
 **Open class:** **Bombard** fires 2 kg steel cannonballs — eight of them,
 one every 1.2 s. Little damage, but a real shove from across the arena.
@@ -180,6 +230,9 @@ rolling balls, flails…
   flamethrower, a harpoon gun and a gas cannon. Any part on a ram slider can
   be set to fire off the end: pick the cable, winch, spare rounds and reload
   time. Mirror a part to the other side with everything on it.
+- **Share links:** *Copy share link* (Robot & saves tab) packs the robot into
+  a link, about 1,000 characters for a typical robot. Whoever opens it gets
+  the robot in their garage and saved robots.
 
 Stats update as you build: weight, cost, top speed and pushing force, battery
 life, each weapon's force or stored energy and spin-up time, spares and

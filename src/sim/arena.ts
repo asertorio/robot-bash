@@ -1,5 +1,5 @@
 import RAPIER from '@dimforge/rapier3d-compat';
-import { ARENA_GROUPS } from './groups';
+import { ARENA_GROUPS, DEBRIS_GROUPS } from './groups';
 import { qaxis, type V3 } from './vmath';
 
 /** Arena layout. Shared by the simulation and the renderer. */
@@ -19,6 +19,37 @@ export const ARENA = {
   /** Grille that belches fire on a cycle. */
   flamePit: { x: 2.6, z: 2.4, half: 0.6, period: 7, burn: 2.2 },
   floorFriction: 1.0,
+  /**
+   * Wall spikes: hardened-steel strips bolted to the side walls (x = ±half),
+   * two each, clear of the corners and the end walls (where football's goals
+   * go). Each is a plate standing `depth` proud of the wall carrying rows of
+   * points; the collider is the plate, the points are what does the damage
+   * (see SPIKES in match.ts).
+   */
+  spikes: { centres: [-1.6, 1.6], halfLength: 0.9, depth: 0.12, y0: 0.05, y1: 0.32 },
+  /** Sumo: a raised steel dais in the middle of the floor. Pushed off it, you're out. */
+  dais: { radius: 2.3, height: 0.3 },
+  /**
+   * Robot football: a light plastic ball, and a goal mouth against each
+   * end wall (z = ∓half). It's a goal when the ball's centre is within
+   * `depth` of the wall between the posts.
+   */
+  football: { ballRadius: 0.22, ballMass: 1.6, goalHalfWidth: 1.1, depth: 0.5 },
+  /**
+   * The gauntlet: start at the −z end, finish over the line at +z. Two steel
+   * barriers make a chicane — the first leaves a gap on the −x side (past the
+   * floor flipper), the second on the +x side (past the flame pit) — and loose
+   * plywood crates block the run up to the second gap.
+   */
+  gauntlet: {
+    startZ: -5,
+    finishZ: 4.9,
+    barriers: [{ z: -2.5, x0: -1.2, x1: 6 }, { z: 1.5, x0: -6, x1: 1.2 }],
+    barrierHeight: 0.32,
+    crates: [[2.4, 0.5], [3.3, 0.9], [4.2, 0.4], [3.0, -0.2], [4.0, 1.1], [5.0, 0.8]] as Array<[number, number]>,
+    crateSize: 0.4,
+    crateMass: 14,
+  },
 };
 
 export interface Rect { x0: number; x1: number; z0: number; z1: number }
@@ -109,7 +140,8 @@ export class Arena {
   flipperAngle = 0;
   private flipperState: 'ready' | 'rising' | 'holding' | 'lowering' | 'cooldown' = 'ready';
   private flipperTimer = 0;
-  private time = 0;
+  /** Arena clock (s), which runs the flame pit cycle. Public so a network mirror can copy it. */
+  time = 0;
 
   private world: RAPIER.World;
 
@@ -226,6 +258,95 @@ export class Arena {
   isInPit(p: V3): boolean {
     const { pit } = ARENA;
     return this.pitOpen && p.y < -0.2 && Math.abs(p.x - pit.x) < pit.half + 0.2 && Math.abs(p.z - pit.z) < pit.half + 0.2;
+  }
+
+  /** Wall spike strips' colliders (a hit on one is a hit by a spike). */
+  readonly spikeColliders = new Set<number>();
+
+  /** Bolt the spike strips to the side walls. */
+  addSpikes() {
+    const s = ARENA.spikes;
+    const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+    for (const side of [-1, 1]) {
+      for (const z of s.centres) {
+        const c = this.world.createCollider(
+          RAPIER.ColliderDesc.cuboid(s.depth / 2, (s.y1 - s.y0) / 2, s.halfLength)
+            .setTranslation(side * (ARENA.half - s.depth / 2), (s.y0 + s.y1) / 2, z)
+            .setFriction(0.5).setRestitution(0.05).setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Min)
+            .setCollisionGroups(ARENA_GROUPS),
+          body,
+        );
+        this.staticColliders.add(c.handle);
+        this.spikeColliders.add(c.handle);
+      }
+    }
+  }
+
+  /** The gauntlet's barriers (fixed) and crates (loose; returned). */
+  addGauntlet(): RAPIER.RigidBody[] {
+    const g = ARENA.gauntlet;
+    const ground = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+    for (const b of g.barriers) {
+      const c = this.world.createCollider(
+        RAPIER.ColliderDesc.cuboid((b.x1 - b.x0) / 2, g.barrierHeight / 2, 0.075).setTranslation((b.x0 + b.x1) / 2, g.barrierHeight / 2, b.z)
+          .setFriction(0.3).setRestitution(0.05).setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Min).setCollisionGroups(ARENA_GROUPS),
+        ground,
+      );
+      this.staticColliders.add(c.handle);
+    }
+    const h = g.crateSize / 2;
+    return g.crates.map(([x, z]) => {
+      const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, h + 0.005, z).setRotation({ x: 0, y: Math.sin(x * 3), z: 0, w: Math.cos(x * 3) }).setLinearDamping(0.1).setAngularDamping(0.3));
+      // Plywood crates: debris as far as collisions go, so they're shoved, not fought.
+      this.world.createCollider(RAPIER.ColliderDesc.cuboid(h, h, h).setMass(g.crateMass).setFriction(0.5).setRestitution(0.1).setCollisionGroups(DEBRIS_GROUPS), body);
+      return body;
+    });
+  }
+
+  /** Sumo: raise the dais (once). */
+  addDais() {
+    const { radius, height } = ARENA.dais;
+    const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, height / 2, 0));
+    const c = this.world.createCollider(
+      RAPIER.ColliderDesc.cylinder(height / 2, radius).setFriction(ARENA.floorFriction)
+        .setFrictionCombineRule(RAPIER.CoefficientCombineRule.Multiply)
+        .setRestitution(0.05).setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Min)
+        .setCollisionGroups(ARENA_GROUPS),
+      body,
+    );
+    this.staticColliders.add(c.handle);
+  }
+
+  /** Sumo: off the dais — clear of its edge and below its top. */
+  isOffDais(p: V3): boolean {
+    const { radius, height } = ARENA.dais;
+    return Math.hypot(p.x, p.z) > radius + 0.05 && p.y < height - 0.05;
+  }
+
+  /**
+   * Robot football: the ball, a hollow plastic sphere. It's debris as far as
+   * collisions go: robots and the arena hit it, wheels' floor spheres don't
+   * (their cylinders do). Some rolling resistance, so it doesn't roll forever.
+   */
+  addBall(): RAPIER.RigidBody {
+    const f = ARENA.football;
+    const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(0, f.ballRadius + 0.01, 0)
+      .setLinearDamping(0.25).setAngularDamping(0.4).setCcdEnabled(true));
+    this.world.createCollider(
+      RAPIER.ColliderDesc.ball(f.ballRadius).setMass(f.ballMass).setFriction(0.6).setRestitution(0.55)
+        .setCollisionGroups(DEBRIS_GROUPS),
+      body,
+    );
+    return body;
+  }
+
+  /** Robot football: which end the ball is in the goal at (-1 is the −z end), or 0. */
+  goalAt(p: V3): -1 | 0 | 1 {
+    const f = ARENA.football;
+    if (Math.abs(p.x) > f.goalHalfWidth || p.y > 0.8) return 0;
+    if (p.z < -ARENA.half + f.depth) return -1;
+    if (p.z > ARENA.half - f.depth) return 1;
+    return 0;
   }
 
   isOutOfArena(p: V3): boolean {

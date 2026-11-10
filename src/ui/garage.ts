@@ -1,4 +1,5 @@
 import { deleteDesign, loadDesigns, parseDesign, saveDesign } from '../data/garage';
+import { designFromHash, shareUrl } from '../data/share';
 import { MATERIALS, type Material } from '../data/materials';
 import { BATTERIES, MOTORS, RAMS, TANKS, VALVES, WHEELS, type BatterySpec, type MotorSpec, type RamSpec, type TankSpec, type ValveSpec, type WheelSpec } from '../data/parts';
 import { HOUSE_ROBOTS, MONSTER_HOUSE } from '../data/house';
@@ -42,6 +43,24 @@ export interface GarageHost {
 }
 
 const TEMPLATE_IDS = new Set([...TEMPLATES, ...HOUSE_ROBOTS, ...MONSTER_HOUSE].map((t) => t.id));
+/**
+ * If the page was opened from a share link (`#robot=…`), take the robot out of
+ * the address, keep it in the player's saved robots and return it so the app
+ * can open it in the garage. Null when there's no link or it won't decode.
+ */
+export async function takeSharedDesign(): Promise<RobotDesign | null> {
+  if (!/(^#|&)robot=/.test(location.hash)) return null;
+  const d = await designFromHash(location.hash);
+  // Clear the link either way, so a reload doesn't add the robot again (or retry a broken link).
+  history.replaceState(null, '', location.pathname + location.search);
+  if (!d) return null;
+  // Never shadow a starter robot, or overwrite a different robot the player saved under the same id.
+  const clash = loadDesigns().find((s) => s.id === d.id);
+  if (TEMPLATE_IDS.has(d.id) || (clash && JSON.stringify(clash) !== JSON.stringify(d))) d.id = `custom-${Date.now().toString(36)}`;
+  saveDesign(d);
+  return d;
+}
+
 const fmt = (v: number, d = 0) => v.toLocaleString('en-GB', { minimumFractionDigits: d, maximumFractionDigits: d });
 
 /**
@@ -353,6 +372,8 @@ export class Garage {
     const exportBox = h('textarea', { class: 'json', readOnly: true, rows: 4 }, JSON.stringify(d));
     const importBox = h('textarea', { class: 'json', rows: 3, placeholder: 'Paste a robot design (JSON) here' });
     const importErr = h('div', { class: 'err' });
+    // Only shown when the clipboard is unavailable, so the link can be copied by hand.
+    const linkBox = h('textarea', { class: 'json', readOnly: true, rows: 3, style: 'display:none' });
     return h('div', {},
       this.text('Name', d.name, (v) => (d.name = v)),
       this.text('Description', d.description, (v) => (d.description = v)),
@@ -375,12 +396,41 @@ export class Garage {
       h('h4', {}, 'Share'),
       h('div', { class: 'hint' }, 'A design is plain JSON: copy it to share or back up, or paste one in.'),
       exportBox,
-      h('div', { class: 'gactions' }, h('button', { class: 'small', onclick: () => { exportBox.select(); void navigator.clipboard?.writeText(exportBox.value); this.flash('Design copied.'); } }, 'Copy')),
+      h('div', { class: 'gactions' },
+        h('button', { class: 'small', onclick: () => { exportBox.select(); void navigator.clipboard?.writeText(exportBox.value); this.flash('Design copied.'); } }, 'Copy'),
+        h('button', { class: 'small', title: 'A link that opens this robot in anyone\'s garage', onclick: () => void this.copyShareLink(linkBox) }, 'Copy share link')),
+      linkBox,
       importBox,
       importErr,
       h('div', { class: 'gactions' }, h('button', { class: 'small', onclick: () => {
         try { this.load(parseDesign(importBox.value)); this.flash('Design loaded.'); } catch (e) { importErr.textContent = (e as Error).message; }
       } }, 'Load JSON')));
+  }
+
+  /** Copy a link that opens the robot on the bench; falls back to showing it when the clipboard is unavailable. */
+  private async copyShareLink(box: HTMLTextAreaElement) {
+    let url: string;
+    try {
+      url = await shareUrl(location.origin + location.pathname, this.draft);
+    } catch (e) {
+      this.flash(`Couldn't make a link: ${(e as Error).message}`);
+      return;
+    }
+    // Some chat apps and older browsers cut links off at around 2,000 characters.
+    const long = url.length > 2000 ? ` It's ${fmt(url.length)} characters long, so some chat apps may cut it short — send the JSON instead if it won't open.` : '';
+    try {
+      if (!navigator.clipboard) throw new Error('no clipboard');
+      await navigator.clipboard.writeText(url);
+      box.style.display = 'none';
+      this.flash(`Share link copied.${long}`);
+    } catch {
+      // No clipboard (plain http, or permission refused): let them copy it by hand.
+      box.value = url;
+      box.style.display = '';
+      box.focus();
+      box.select();
+      this.flash(`Copy the share link from the box below.${long}`);
+    }
   }
 
   private confirmLoad(d: RobotDesign) {

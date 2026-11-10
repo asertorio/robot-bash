@@ -35,6 +35,8 @@ src/
             house, examples), garage save/load (localStorage)
   input/    Key/gamepad bindings, arcade/tank mixing, key ramp, macros
   render/   Three.js view that mirrors the sim; never changes collision shapes
+  audio/    Web Audio fight sound (SOUND) and the spoken commentator (speechSynthesis)
+  net/      Online play: PeerJS/WebRTC link; the snapshot format is sim/netstate.ts
   ui/       Menus, HUD, garage editor, controls screen — plain DOM via h() in ui/dom.ts
   dev/      showroom.ts (dev-only page)
   main.ts   App: screens, match loop, wiring players/CPUs to the sim
@@ -42,7 +44,7 @@ tests/      Vitest; helpers.ts initialises Rapier and has run()/spawnAt()/drive(
 ```
 
 Dependency direction: `data` and `sim` may import each other's types and
-catalogues; `input`, `render` and `ui` sit on top. Nothing in `sim` or `data`
+catalogues; `input`, `render`, `audio`, `net` and `ui` sit on top. Nothing in `sim` or `data`
 may touch `document`, `window` or Three.js (localStorage in `data/garage.ts`
 is the one exception, wrapped in try/catch).
 

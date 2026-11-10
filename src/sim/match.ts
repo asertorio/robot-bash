@@ -32,6 +32,28 @@ export const BIG_HIT = 1500;
 
 export type Phase = 'countdown' | 'fight' | 'over';
 
+/**
+ * What kind of contest: an ordinary fight, or one of the show's side events.
+ * - sumo: on a raised dais; pushed (or driven) off it, you're out.
+ * - football: a ball and a goal at each end; first to GOALS_TO_WIN, or the
+ *   most goals at time. In a melee, even-numbered players (P1, P3) are the
+ *   red team at the −z end and odd-numbered ones blue at the +z end.
+ * - gauntlet: a race through obstacles (ARENA.gauntlet) to the finish line;
+ *   first over it wins, else whoever got furthest at time. Fighting allowed.
+ */
+export type GameEvent = 'fight' | 'sumo' | 'football' | 'gauntlet';
+export const GOALS_TO_WIN = 3;
+
+/**
+ * Wall spikes, as an attacker: hardened-steel points. A robot hitting a
+ * strip takes the impact as it would from a robot's spike (hitShare with a
+ * hardened spike edge, doubled because against the arena the robot takes the
+ * whole impact rather than half), and a robot pinned on it is pierced like
+ * anything else under steady force (PIERCE in damage.ts). `sayAbove` (J):
+ * hits worth a line of commentary.
+ */
+export const SPIKES = { material: 'hardox', sayAbove: 30 };
+
 export interface CommentaryLine {
   time: number;
   text: string;
@@ -92,6 +114,16 @@ export interface MatchOptions {
   breaks?: boolean;
   /** Last 30 seconds: the pit opens and the house robots leave their corners. */
   finale?: boolean;
+  /** A side event instead of a fight (default 'fight'). */
+  event?: GameEvent;
+  /** Spike strips on the side walls. */
+  wallSpikes?: boolean;
+  /**
+   * Damage carried in from an earlier fight (a championship): per competitor,
+   * each part's condition by index in `robot.parts` (see sim/tournament.ts).
+   * A part at 0 fails as the fight starts — it's missing, or dead.
+   */
+  wear?: Array<number[] | null | undefined>;
 }
 
 /** One robot's part grinding on another's: who, what, and how it's going. */
@@ -127,6 +159,15 @@ export class Match {
   /** Current referee count per robot (seconds), or null when not counting. */
   counts: Array<number | null>;
   eliminated: Array<string | null>;
+  readonly event: GameEvent;
+  /** Football: the ball, and goals scored by red (P1, P3) and blue (P2, P4). */
+  readonly ball: RAPIER.RigidBody | null = null;
+  goals: [number, number] = [0, 0];
+  /** Gauntlet: the loose crates, and how far up the course each competitor has got (m, the furthest z reached). */
+  readonly crates: RAPIER.RigidBody[] = [];
+  progress: number[] = [];
+  /** Competitors in the order they went out (first out first). */
+  outOrder: number[] = [];
 
   private events = new RAPIER.EventQueue(true);
   private acc = 0;
@@ -151,13 +192,20 @@ export class Match {
   private locked = new Map<string, number>();
   private lastCutSay = new Map<string, number>();
   private lastBigSay = -99;
+  private lastStanding = Infinity;
+  private lastSpikeSay = new Map<Robot, number>();
 
   constructor(designs: RobotDesign[], opts: MatchOptions = {}) {
     this.world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.world.timestep = STEP;
     this.world.numSolverIterations = 8;
     this.arena = new Arena(this.world);
-    const spawns = opts.spawns ?? [
+    this.event = opts.event ?? 'fight';
+    if (opts.wallSpikes) this.arena.addSpikes();
+    if (this.event === 'sumo') this.arena.addDais();
+    if (this.event === 'football') this.ball = this.arena.addBall();
+    if (this.event === 'gauntlet') this.crates = this.arena.addGauntlet();
+    const spawns = opts.spawns ?? eventSpawns(this.event, designs.length) ?? [
       { pos: { x: 0, y: 0.01, z: -3.5 }, yaw: 0 },
       { pos: { x: 0, y: 0.01, z: 3.5 }, yaw: Math.PI },
       { pos: { x: -3.5, y: 0.01, z: 0 }, yaw: Math.PI / 2 },
@@ -168,6 +216,15 @@ export class Match {
     this.breaks = opts.breaks ?? true;
     this.finale = opts.finale ?? false;
     for (const r of this.competitors) r.damageScale = this.damageScale;
+    opts.wear?.forEach((w, i) => {
+      const r = this.competitors[i];
+      if (!w || !r || w.length !== r.parts.length) return;
+      r.parts.forEach((p, k) => {
+        p.condition = Math.max(0, Math.min(1, w[k]));
+        // Already-known damage isn't news: only announce it getting worse.
+        p.announced = p.condition < 0.3 ? 0.3 : p.condition < 0.65 ? 0.65 : p.announced;
+      });
+    });
     this.houseRobots = (opts.house ?? []).slice(0, 4).map((d, k) => {
       const zone = HOUSE_CORNERS[k];
       const home = zoneCentre(zone);
@@ -185,6 +242,7 @@ export class Match {
     this.lastSelfMove = this.competitors.map(() => 0);
     this.movingFor = this.competitors.map(() => 0);
     this.tally = this.competitors.map(() => ({ aggression: 0, control: 0, damage: 0, style: 0 }));
+    this.progress = this.competitors.map((r) => r.position.z);
   }
 
   /** Advance by a frame's worth of real time, in fixed physics steps. */
@@ -271,6 +329,12 @@ export class Match {
       if (!c1 || !c2) return;
       const owner1 = this.owner(c1), owner2 = this.owner(c2);
       if (!owner1 && !owner2) return;
+      if (this.ball && (c1.parent() === this.ball || c2.parent() === this.ball)) {
+        const toucher = owner1 ?? owner2;
+        if (toucher && toucher.robot.index < this.competitors.length) this.ballTouch = toucher.robot;
+        // A ball isn't armour: kicking it doesn't hurt anyone.
+        return;
+      }
       if (owner1 && owner2 && owner1.robot !== owner2.robot) this.touched(owner1.robot, owner2.robot);
       const impulse = e.totalForceMagnitude() * STEP;
 
@@ -286,6 +350,9 @@ export class Match {
         normal = flipped ? vscale(mn, -1) : mn;
       });
       if (!point || !normal) return;
+      // A robot on the wall spikes: pierced under steady force, like any spike.
+      const spike = !(owner1 && owner2) && (this.arena.spikeColliders.has(c1.handle) || this.arena.spikeColliders.has(c2.handle));
+      if (spike) this.onSpikes((owner1 ?? owner2)!, e.totalForceMagnitude(), point);
       const v1 = this.preVelocity(c1, point, snap);
       const v2 = this.preVelocity(c2, point, snap);
       const rel = vsub(v1, v2);
@@ -326,6 +393,10 @@ export class Match {
         const p1 = owner1.part, p2 = owner2.part;
         share1 = hitShare(p2, p1);
         share2 = hitShare(p1, p2);
+      } else if (spike) {
+        const victim = (owner1 ?? owner2)!;
+        const share = 2 * hitShare(SPIKE_SIDE, victim.part);
+        if (owner1) share1 = share; else share2 = share;
       }
       const prior1 = ep.energy * share1, prior2 = ep.energy * share2;
       const before = ep.energy;
@@ -337,6 +408,13 @@ export class Match {
           this.lastBigSay = this.time;
           const [hitter, hit] = owner1.part.edge !== 'blunt' ? [owner1, owner2] : [owner2, owner1];
           this.say(BIG_LINES[Math.floor(this.time * 7) % BIG_LINES.length](hitter.robot.design.name, hit.robot.design.name), 'major');
+        }
+      }
+      if (spike && before < SPIKES.sayAbove && ep.energy >= SPIKES.sayAbove && this.phase === 'fight') {
+        const who = (owner1 ?? owner2)!.robot;
+        if (this.time - (this.lastSpikeSay.get(who) ?? -99) > 5) {
+          this.lastSpikeSay.set(who, this.time);
+          this.say(`${who.design.name} is slammed into the wall spikes!`, 'major');
         }
       }
       if (ep.energy > 20 && ep.energy > (this.biggestHit?.energy ?? 0) && (owner1 || owner2)) {
@@ -402,6 +480,17 @@ export class Match {
       const what = d.kind === 'wheel' ? 'a tyre' : d.label.toLowerCase().includes(metal.split('-')[0]) ? lowerFirst(d.label) : `${metal} ${lowerFirst(d.label)}`;
       this.say(`${att.robot.design.name}'s ${tool} is ${verb} ${def.robot.design.name}'s ${what}!`, 'info');
     }
+  }
+
+  /** Steady force on the wall spikes pierces plate, as a robot's spike would. */
+  private onSpikes(victim: Wear, force: number, point: V3) {
+    const d = victim.part;
+    if (d.kind !== 'structure' || d.detached) return;
+    const fp = pierceForce(d.material, d.thickness);
+    if (force <= fp) return;
+    const over = Math.min(PIERCE.MAX_OVERLOAD, force / fp - 1);
+    const bite = Math.sqrt(Math.max(0.05, Math.min(4, hardnessOf(material(SPIKES.material)) / hardnessOf(material(d.material)))));
+    victim.robot.cut(d, PIERCE.RATE * over * bite * STEP, point);
   }
 
   private owner(c: RAPIER.Collider): { robot: Robot; part: Part } | null {
@@ -510,6 +599,7 @@ export class Match {
       if (this.sandbox) return;
       if (this.arena.isInPit(pos)) return this.eliminate(i, 'into the pit');
       if (this.arena.isOutOfArena(pos)) return this.eliminate(i, 'out of the arena');
+      if (this.event === 'sumo' && this.phase === 'fight' && this.arena.isOffDais(pos)) return this.eliminate(i, 'off the dais');
       if (this.phase !== 'fight') return;
 
       // Moving under its own power resets the count; being shoved around
@@ -542,7 +632,14 @@ export class Match {
       // Judges' notes.
       const t = this.tally[i];
       if (selfMoving) t.control += dt;
-      const opp = this.competitors.find((_, j) => j !== i && !this.eliminated[j]);
+      // The nearest rival is the one you're going for (in a melee there are several).
+      let opp: Robot | undefined;
+      let od = Infinity;
+      this.competitors.forEach((o, j) => {
+        if (j === i || this.eliminated[j]) return;
+        const dd = Math.hypot(o.position.x - pos.x, o.position.z - pos.z);
+        if (dd < od) { od = dd; opp = o; }
+      });
       if (opp) {
         const to = vsub(opp.position, pos);
         const d = vlen(to);
@@ -552,18 +649,94 @@ export class Match {
       }
     });
 
-    if (this.phase === 'fight' && !this.sandbox) {
+    // A melee: say how many are left (once, however many went out this check).
+    const standing = alive().length;
+    if (this.competitors.length > 2 && standing < this.lastStanding && this.lastStanding !== Infinity && standing >= 2) this.say(standing === 2 ? 'Down to the last two!' : `${standing} robots left in the arena!`, 'info');
+    this.lastStanding = standing;
+
+    if (this.event === 'football' && this.phase === 'fight') this.football();
+    if (this.event === 'gauntlet' && this.phase === 'fight' && !this.sandbox) this.gauntlet();
+    if (this.phase === 'fight' && !this.sandbox && this.event === 'football') {
+      // A team with nobody left loses; otherwise goals decide, at 3 or at time.
+      const teamLeft = [0, 1].map((t) => this.competitors.some((_, i) => i % 2 === t && !this.eliminated[i]));
+      if (this.phase === 'fight' && this.competitors.length > 1 && (!teamLeft[0] || !teamLeft[1])) {
+        const t = teamLeft[0] ? 0 : teamLeft[1] ? 1 : null;
+        this.finish({ winner: t, reason: t === null ? 'Nobody left on the pitch' : `${TEAM[1 - t]} has nobody left on the pitch` });
+      } else if (this.time >= this.duration) {
+        const [r, b] = this.goals;
+        if (r === b) this.finish({ winner: null, reason: `A ${r}–${b} draw` });
+        else this.finish({ winner: r > b ? 0 : 1, reason: `${r}–${b} at full time` });
+      }
+    } else if (this.phase === 'fight' && !this.sandbox && this.event === 'gauntlet') {
+      // Everyone out: nobody made it. At time: furthest up the course.
+      if (alive().length === 0) this.finish({ winner: null, reason: 'Nobody survived the gauntlet' });
+      else if (this.time >= this.duration) {
+        const best = this.competitors.map((_, i) => i).filter((i) => !this.eliminated[i]).sort((a, b) => this.progress[b] - this.progress[a])[0];
+        const g = ARENA.gauntlet;
+        this.finish({ winner: best, reason: `Furthest along the course: ${Math.round((100 * (this.progress[best] - g.startZ)) / (g.finishZ - g.startZ))}% of the way` });
+      }
+    } else if (this.phase === 'fight' && !this.sandbox) {
       const left = alive();
       if (left.length <= 1 && this.competitors.length > 1) {
         const winner = left[0];
-        const loser = this.competitors.find((_, i) => this.eliminated[i]);
-        const reason = loser ? `${loser.design.name} went ${this.eliminated[loser.index]}` : '';
+        // The last one out is the story (in a melee, the earlier ones are history).
+        const loser = this.competitors[this.outOrder[this.outOrder.length - 1]];
+        const reason = !loser ? ''
+          : this.competitors.length > 2 ? `Last robot standing — ${outPhrase(loser.design.name, this.eliminated[loser.index])}`
+          : outPhrase(loser.design.name, this.eliminated[loser.index]);
         this.finish({ winner: winner ? winner.index : null, reason });
       } else if (this.time >= this.duration) {
         this.judge();
       }
     }
   }
+
+  /** Gauntlet: track progress; first over the finish line wins. */
+  private gauntlet() {
+    const g = ARENA.gauntlet;
+    this.competitors.forEach((r, i) => {
+      if (this.eliminated[i] || this.phase !== 'fight') return;
+      this.progress[i] = Math.max(this.progress[i], r.position.z);
+      if (r.position.z > g.finishZ && r.position.y > -0.2 && Math.abs(r.position.x) < ARENA.half) {
+        this.say(`${r.design.name} has run the gauntlet!`, 'major');
+        if (this.competitors.length > 0) this.finish({ winner: i, reason: `${r.design.name} crossed the line first` });
+      }
+    });
+  }
+
+  /** Football: goals, and a ball that's gone in the pit or out of the arena comes back. */
+  private football() {
+    const ball = this.ball;
+    if (!ball || this.phase !== 'fight') return;
+    const p = ball.translation();
+    const end = this.arena.goalAt(p);
+    // The −z goal is red's: a ball in it is a goal for blue.
+    if (end !== 0) {
+      const team = end < 0 ? 1 : 0;
+      this.goals[team]++;
+      const [r, b] = this.goals;
+      const scorer = this.ballTouch;
+      this.say(`GOAL! ${scorer ? `${scorer.design.name} scores` : `${TEAM[team]} scores`}! ${TEAM[0]} ${r}, ${TEAM[1]} ${b}.`, 'major');
+      this.resetBall();
+      if (this.goals[team] >= GOALS_TO_WIN && this.competitors.length > 1) this.finish({ winner: team, reason: `${TEAM[team]} wins ${Math.max(r, b)}–${Math.min(r, b)}` });
+      return;
+    }
+    if (this.arena.isOutOfArena(p) || p.y < -0.3) {
+      this.say('The ball\'s gone — a new one in the centre circle.', 'info');
+      this.resetBall();
+    }
+  }
+
+  private resetBall() {
+    const b = this.ball!;
+    b.setTranslation({ x: 0, y: ARENA.football.ballRadius + 0.4, z: 0 }, true);
+    b.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    b.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    this.ballTouch = null;
+  }
+
+  /** Football: who touched the ball last (for "X scores!"). */
+  private ballTouch: Robot | null = null;
 
   /**
    * Two robots shoving nose to nose, both trying, neither going anywhere: after
@@ -660,6 +833,7 @@ export class Match {
   private eliminate(i: number, how: string) {
     if (this.eliminated[i]) return;
     this.eliminated[i] = how;
+    this.outOrder.push(i);
     this.counts[i] = null;
     const name = this.robots[i].design.name;
     const line = how === 'immobilised' ? `${name} is immobilised! …8, 9, 10 — out!` : `${name} is ${how}!`;
@@ -708,6 +882,43 @@ export class Match {
     this.world.free();
     this.events.free();
   }
+}
+
+const TEAM = ['Red', 'Blue'];
+
+/** The wall spikes as the attacking side of a hit (see hitShare). */
+const SPIKE_SIDE = { kind: 'structure' as const, material: SPIKES.material, edge: 'spike' as const };
+
+/** "Flipside was immobilised", "Whisk went into the pit". */
+const outPhrase = (name: string, how: string | null): string => (how === 'immobilised' ? `${name} was immobilised` : `${name} went ${how ?? 'out'}`);
+
+/**
+ * Side events' starting places. Sumo: round the middle of the dais, facing
+ * in. Football: each team in front of its own goal, facing up the pitch.
+ */
+function eventSpawns(event: GameEvent, n: number): Array<{ pos: V3; yaw: number }> | null {
+  if (event === 'sumo') {
+    const y = ARENA.dais.height + 0.01;
+    return [...Array(n).keys()].map((i) => {
+      const a = (i / n) * Math.PI * 2 + (n === 2 ? 0 : Math.PI / 4);
+      const r = 1.25;
+      const x = Math.sin(a) * r, z = -Math.cos(a) * r;
+      return { pos: { x, y, z }, yaw: Math.atan2(-x, -z) };
+    });
+  }
+  if (event === 'gauntlet') {
+    const xs = [-2.2, 0.2, -4.4, 2.6];
+    return [...Array(n).keys()].map((i) => ({ pos: { x: xs[i % 4], y: 0.01, z: ARENA.gauntlet.startZ }, yaw: 0 }));
+  }
+  if (event === 'football') {
+    return [...Array(n).keys()].map((i) => {
+      const team = i % 2, k = Math.floor(i / 2);
+      const perTeam = Math.ceil((n - team) / 2);
+      const x = perTeam > 1 ? (k === 0 ? 1.3 : -1.3) : 0;
+      return { pos: { x, y: 0.01, z: team === 0 ? -2.6 : 2.6 }, yaw: team === 0 ? 0 : Math.PI };
+    });
+  }
+  return null;
 }
 
 const SHORT_NAMES: Record<string, string> = {

@@ -4,6 +4,7 @@ import { ARENA, arenaBoxes, flamePitRect } from '../sim/arena';
 import { partFrames, subtree } from '../sim/assembly';
 import type { Match } from '../sim/match';
 import type { Part, Robot } from '../sim/robot';
+import type { V3 } from '../sim/vmath';
 import { MechanismView } from './mechanisms';
 import { buildPartMesh } from './partMesh';
 import { setWear } from './surfaces';
@@ -35,8 +36,20 @@ export class MatchView {
   private flamePositions = new Float32Array(400 * 3);
   private camTarget = new THREE.Vector3(0, 0, 0);
   private camPos = new THREE.Vector3(0, 12, 14);
-  /** 'tv' frames the fight; 'follow' orbits one robot (garage test bay). */
-  cameraMode: 'tv' | 'follow' = 'tv';
+  /**
+   * 'tv' frames the fight; 'follow' orbits one robot (garage test bay);
+   * 'chase' sits a little behind and above one robot, looking where it's going.
+   */
+  cameraMode: 'tv' | 'follow' | 'chase' = 'tv';
+  /** Action replay: part poses to draw instead of the bodies' (see replay.ts), and the orbiting camera. */
+  private replay: { poses: Float32Array; target: V3; angle: number; ball: BallPose | null } | null = null;
+  private partIndex = new Map<Part, number>();
+  /** Side events' scenery (the sumo dais, goal mouths) and the football. */
+  private eventGroup = new THREE.Group();
+  private ballMesh: THREE.Mesh | null = null;
+  private crateMeshes: THREE.Mesh[] = [];
+  /** Chase camera's heading (world yaw), smoothed so a spin doesn't whip it round. */
+  private chaseYaw = 0;
   followIndex = 0;
   private orbit = { yaw: 0.6, pitch: 0.55, dist: 3.2 };
   private snapCamera = false;
@@ -406,6 +419,9 @@ export class MatchView {
     this.mechanisms = [];
     this.blurDiscs = [];
     this.sparkData = [];
+    this.replay = null;
+    this.buildEvent(match);
+    this.partIndex = new Map(match.robots.flatMap((r) => r.parts).map((p, i) => [p, i]));
     for (const r of match.robots) {
       const first = this.partMeshes.length;
       for (const part of r.parts) {
@@ -457,6 +473,19 @@ export class MatchView {
       const fq = m.arena.floorFlipper.rotation();
       this.floorFlipper.quaternion.set(fq.x, fq.y, fq.z, fq.w);
       this.syncFlames(m, dt);
+      m.crates.forEach((b, i) => {
+        const c = this.crateMeshes[i];
+        if (!c) return;
+        const t = b.translation(), q = b.rotation();
+        c.position.set(t.x, t.y, t.z);
+        c.quaternion.set(q.x, q.y, q.z, q.w);
+      });
+      if (this.ballMesh && m.ball) {
+        const rb = this.replay?.ball;
+        const t = rb ?? m.ball.translation(), q = rb ? { x: rb.qx, y: rb.qy, z: rb.qz, w: rb.qw } : m.ball.rotation();
+        this.ballMesh.position.set(t.x, t.y, t.z);
+        this.ballMesh.quaternion.set(q.x, q.y, q.z, q.w);
+      }
       this.syncCables(m);
       this.updateCamera(m, dt);
       this.applyShake(dt);
@@ -470,14 +499,24 @@ export class MatchView {
     for (const pm of this.partMeshes) {
       const { part, mesh, mats } = pm;
       const b = part.body, v = part.visual;
-      // Spare rounds wait in the magazine on disabled bodies: not drawn till loaded.
-      if (!b || !v || !part.collider || !b.isEnabled()) { mesh.visible = false; continue; }
-      mesh.visible = true;
-      // Body pose × the part's pose on that body.
-      const bp = b.translation(), bq = b.rotation();
-      const q = new THREE.Quaternion(bq.x, bq.y, bq.z, bq.w);
-      mesh.position.set(v.pos.x, v.pos.y, v.pos.z).applyQuaternion(q).add(new THREE.Vector3(bp.x, bp.y, bp.z));
-      mesh.quaternion.copy(q).multiply(new THREE.Quaternion(v.rot.x, v.rot.y, v.rot.z, v.rot.w));
+      const rp = this.replay;
+      if (rp) {
+        // Replay: the recorded world pose, whatever has happened since.
+        const o = (this.partIndex.get(part) ?? -1) * 8;
+        if (o < 0 || rp.poses[o + 7] <= 0) { mesh.visible = false; continue; }
+        mesh.visible = true;
+        mesh.position.set(rp.poses[o], rp.poses[o + 1], rp.poses[o + 2]);
+        mesh.quaternion.set(rp.poses[o + 3], rp.poses[o + 4], rp.poses[o + 5], rp.poses[o + 6]);
+      } else {
+        // Spare rounds wait in the magazine on disabled bodies: not drawn till loaded.
+        if (!b || !v || !part.collider || !b.isEnabled()) { mesh.visible = false; continue; }
+        mesh.visible = true;
+        // Body pose × the part's pose on that body.
+        const bp = b.translation(), bq = b.rotation();
+        const q = new THREE.Quaternion(bq.x, bq.y, bq.z, bq.w);
+        mesh.position.set(v.pos.x, v.pos.y, v.pos.z).applyQuaternion(q).add(new THREE.Vector3(bp.x, bp.y, bp.z));
+        mesh.quaternion.copy(q).multiply(new THREE.Quaternion(v.rot.x, v.rot.y, v.rot.z, v.rot.w));
+      }
       mesh.scale.set(1, 1, 1);
       const pv = this.preview;
       if (pv && part.def && m.robots[0].parts.includes(part)) {
@@ -498,9 +537,11 @@ export class MatchView {
         mat.emissive.setHex(glow);
       }
     }
-    for (const mech of this.mechanisms) mech.update();
+    // Rams, motors and spinner blur follow the live bodies: hidden in a replay.
+    for (const mech of this.mechanisms) { mech.group.visible = !this.replay; if (!this.replay) mech.update(); }
     for (const { robot, index, mesh } of this.blurDiscs) {
       const rot = robot.rotors()[index];
+      if (this.replay) { mesh.visible = false; continue; }
       if (!rot || !rot.actuator.child.joint) { mesh.visible = false; continue; }
       mesh.position.set(rot.centre.x, rot.centre.y, rot.centre.z);
       // Circle geometry faces +Z; turn it to face along the spin axis.
@@ -593,6 +634,141 @@ export class MatchView {
     this.flames.geometry.attributes.position.needsUpdate = true;
   }
 
+  /**
+   * Show a replay frame (null: back to the live fight). The camera circles
+   * the action slowly from low down, the way a floor-level camera operator would.
+   */
+  setReplay(frame: { poses: Float32Array; target: V3; ball?: BallPose | null } | null) {
+    if (!frame) { this.replay = null; return; }
+    const first = !this.replay;
+    this.replay = { poses: frame.poses, target: frame.target, ball: frame.ball ?? null, angle: this.replay?.angle ?? Math.atan2(this.camPos.x - frame.target.x, this.camPos.z - frame.target.z) };
+    if (first) this.camTarget.set(frame.target.x, frame.target.y, frame.target.z);
+  }
+
+  private replayCamera(dt: number) {
+    const r = this.replay!;
+    r.angle += dt * 0.35;
+    const t = new THREE.Vector3(r.target.x, Math.max(0, r.target.y) + 0.15, r.target.z);
+    const want = t.clone().add(new THREE.Vector3(Math.sin(r.angle) * 2.6, 0.75, Math.cos(r.angle) * 2.6));
+    const lim = ARENA.half + 1.2;
+    want.x = Math.max(-lim, Math.min(lim, want.x));
+    want.z = Math.max(-lim, Math.min(lim, want.z));
+    const k = 1 - Math.exp(-dt * 3);
+    this.camTarget.lerp(t, k);
+    this.camPos.lerp(want, k);
+    this.camera.position.copy(this.camPos);
+    this.camera.lookAt(this.camTarget);
+  }
+
+  /**
+   * Scenery for a side event, drawn to the same sizes as its colliders
+   * (ARENA.dais, ARENA.football): the sumo dais is ground steel with a
+   * hazard-striped edge; football gets a ball and a painted goal mouth and
+   * goal board at each end, red's at −z and blue's at +z.
+   */
+  private buildEvent(m: Match) {
+    if (!this.eventGroup.parent) this.scene.add(this.eventGroup);
+    this.eventGroup.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      mesh.geometry?.dispose();
+      const mat = mesh.material as THREE.Material | undefined;
+      if (mat) { (mat as THREE.MeshStandardMaterial).map?.dispose(); mat.dispose(); }
+    });
+    this.eventGroup.clear();
+    this.ballMesh = null;
+    this.crateMeshes = [];
+    if (m.event === 'gauntlet') {
+      const g = ARENA.gauntlet;
+      const stripe = new THREE.MeshStandardMaterial({ map: makeStripeTexture(), metalness: 0.4, roughness: 0.5 });
+      for (const b of g.barriers) {
+        const wall = new THREE.Mesh(new THREE.BoxGeometry(b.x1 - b.x0, g.barrierHeight, 0.15), stripe);
+        wall.position.set((b.x0 + b.x1) / 2, g.barrierHeight / 2, b.z);
+        wall.castShadow = wall.receiveShadow = true;
+        this.eventGroup.add(wall);
+      }
+      const crateMat = new THREE.MeshStandardMaterial({ map: makeCrateTexture(), roughness: 0.85 });
+      for (let i = 0; i < m.crates.length; i++) {
+        const c = new THREE.Mesh(new THREE.BoxGeometry(g.crateSize, g.crateSize, g.crateSize), crateMat);
+        c.castShadow = c.receiveShadow = true;
+        this.crateMeshes.push(c);
+        this.eventGroup.add(c);
+      }
+      for (const [z, tex] of [[g.startZ - 0.35, makeLineTexture(false)], [g.finishZ + 0.2, makeLineTexture(true)]] as const) {
+        const line = new THREE.Mesh(new THREE.PlaneGeometry(ARENA.half * 2, 0.4), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 }));
+        line.rotation.x = -Math.PI / 2;
+        line.position.set(0, 0.004, z);
+        this.eventGroup.add(line);
+      }
+    }
+    if (m.arena.spikeColliders.size) {
+      // Wall spikes: a dark steel plate with two rows of ground points, sized to the collider.
+      const sp = ARENA.spikes;
+      const plateMat = new THREE.MeshStandardMaterial({ color: 0x2b2e33, metalness: 0.8, roughness: 0.45 });
+      const spikeMat = new THREE.MeshStandardMaterial({ color: 0xc9ccd1, metalness: 0.9, roughness: 0.25 });
+      // Plate and points together are exactly the collider's depth.
+      const tip = 0.06, plateD = sp.depth - tip;
+      const cone = new THREE.ConeGeometry(0.022, tip, 10).rotateZ(-Math.PI / 2);
+      const per = Math.floor((sp.halfLength * 2) / 0.09);
+      const tips = new THREE.InstancedMesh(cone, spikeMat, per * 2 * 4);
+      const mtx = new THREE.Matrix4();
+      let n = 0;
+      for (const side of [-1, 1]) {
+        for (const z of sp.centres) {
+          const plate = new THREE.Mesh(new THREE.BoxGeometry(plateD, sp.y1 - sp.y0, sp.halfLength * 2), plateMat);
+          plate.position.set(side * (ARENA.half - plateD / 2), (sp.y0 + sp.y1) / 2, z);
+          plate.castShadow = plate.receiveShadow = true;
+          this.eventGroup.add(plate);
+          for (let k = 0; k < per; k++) {
+            for (const y of [sp.y0 + 0.07, sp.y1 - 0.07]) {
+              const zz = z - sp.halfLength + 0.045 + k * 0.09 + (y > 0.2 ? 0.045 : 0);
+              if (zz > z + sp.halfLength) continue;
+              mtx.makeRotationY(side > 0 ? Math.PI : 0).setPosition(side * (ARENA.half - plateD - tip / 2), y, zz);
+              tips.setMatrixAt(n++, mtx);
+            }
+          }
+        }
+      }
+      tips.count = n;
+      this.eventGroup.add(tips);
+    }
+    if (m.event === 'sumo') {
+      const { radius, height } = ARENA.dais;
+      const top = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, height, 72), [
+        new THREE.MeshStandardMaterial({ map: makeStripeTexture(), metalness: 0.4, roughness: 0.5 }),
+        new THREE.MeshStandardMaterial({ map: makeDaisTexture(), metalness: 0.75, roughness: 0.38 }),
+        new THREE.MeshStandardMaterial({ color: 0x111111 }),
+      ]);
+      top.position.y = height / 2;
+      top.receiveShadow = top.castShadow = true;
+      this.eventGroup.add(top);
+    }
+    if (m.event === 'football') {
+      const f = ARENA.football;
+      this.ballMesh = new THREE.Mesh(new THREE.IcosahedronGeometry(f.ballRadius, 3), new THREE.MeshStandardMaterial({ map: makeBallTexture(), roughness: 0.45, metalness: 0 }));
+      this.ballMesh.castShadow = true;
+      this.eventGroup.add(this.ballMesh);
+      for (const [end, colour] of [[-1, 0xe2412f], [1, 0x3a8ee6]] as const) {
+        const mouth = new THREE.Mesh(new THREE.PlaneGeometry(f.goalHalfWidth * 2, f.depth), new THREE.MeshStandardMaterial({ color: colour, transparent: true, opacity: 0.45, roughness: 0.8 }));
+        mouth.rotation.x = -Math.PI / 2;
+        mouth.position.set(0, 0.004, end * (ARENA.half - f.depth / 2));
+        const board = new THREE.Mesh(new THREE.PlaneGeometry(f.goalHalfWidth * 2, ARENA.wallHeight * 0.9), new THREE.MeshStandardMaterial({ color: colour, emissive: colour, emissiveIntensity: 0.35, side: THREE.DoubleSide }));
+        board.position.set(0, ARENA.wallHeight * 0.48, end * (ARENA.half - 0.005));
+        this.eventGroup.add(mouth, board);
+      }
+    }
+  }
+
+  /** Put the chase camera behind robot `index`, already facing its way. */
+  startChase(index: number) {
+    this.cameraMode = 'chase';
+    this.followIndex = index;
+    const r = this.match?.robots[index];
+    if (!r) return;
+    const q = r.rotation;
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(new THREE.Quaternion(q.x, q.y, q.z, q.w));
+    this.chaseYaw = Math.atan2(fwd.x, fwd.z);
+  }
+
   /** Shake the camera (0..1), e.g. for a big hit. */
   shake(amount: number) {
     this.shakeAmount = Math.min(1, Math.max(this.shakeAmount, amount));
@@ -622,7 +798,50 @@ export class MatchView {
       }
       return;
     }
+    if (this.replay) { this.replayCamera(dt); return; }
+    if (this.cameraMode === 'chase' && m.robots[this.followIndex]) {
+      this.chaseCamera(m.robots[this.followIndex], dt);
+      return;
+    }
     this.tvCamera(m, dt);
+  }
+
+  /**
+   * Behind the robot, a bit zoomed out: about 3.2 m back and 1.7 m up for a
+   * heavyweight, further for a big robot, looking at a point just ahead of it.
+   * The heading follows the chassis' forward (+Z) on the floor, eased, and
+   * rate-limited so a thwackbot or a spinner's torque reaction doesn't whip
+   * the camera about.
+   */
+  private chaseCamera(r: Robot, dt: number) {
+    const p = r.position;
+    const q = r.rotation;
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(new THREE.Quaternion(q.x, q.y, q.z, q.w));
+    const flat = Math.hypot(fwd.x, fwd.z);
+    if (flat > 0.2) {
+      const want = Math.atan2(fwd.x, fwd.z);
+      let d = want - this.chaseYaw;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      const step = d * (1 - Math.exp(-dt * 3.2));
+      this.chaseYaw += Math.max(-dt * 3.5, Math.min(dt * 3.5, step));
+    }
+    const reach = Math.max(0.6, ...r.parts.map((pt) => pt.visual ? Math.hypot(pt.visual.pos.x, pt.visual.pos.z) : 0).slice(0, 40));
+    const back = 2.6 + reach * 1.4, up = 1.35 + reach * 0.8;
+    const dir = new THREE.Vector3(Math.sin(this.chaseYaw), 0, Math.cos(this.chaseYaw));
+    const target = new THREE.Vector3(p.x, Math.max(0, p.y) + 0.2, p.z).addScaledVector(dir, 0.9);
+    const want = new THREE.Vector3(p.x, Math.max(0, p.y) + up, p.z).addScaledVector(dir, -back);
+    // The walls are low: the camera may hang a little way out over them, rising
+    // as it goes so it still looks down over the top rail.
+    const lim = ARENA.half + 1.6;
+    want.x = Math.max(-lim, Math.min(lim, want.x));
+    want.z = Math.max(-lim, Math.min(lim, want.z));
+    const over = Math.max(Math.abs(want.x), Math.abs(want.z)) - ARENA.half;
+    if (over > 0) want.y += over * 0.6;
+    const k = this.snapCamera ? 1 : 1 - Math.exp(-dt * 6);
+    this.camTarget.lerp(target, k);
+    this.camPos.lerp(want, k);
+    this.camera.position.copy(this.camPos);
+    this.camera.lookAt(this.camTarget);
   }
 
   private tvCamera(m: Match, dt: number) {
@@ -677,6 +896,9 @@ export class MatchView {
     return { x: (v.x * 0.5 + 0.5) * window.innerWidth, y: (-v.y * 0.5 + 0.5) * window.innerHeight };
   }
 }
+
+/** The football's pose in a replay frame. */
+export interface BallPose { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number }
 
 export interface GizmoOptions {
   /** A part of robot 0. */
@@ -761,6 +983,75 @@ function makeFloorTexture(): THREE.CanvasTexture {
     g.fillStyle = '#25272a';
     for (const [x, y] of [[14, 14], [498, 14], [14, 498], [498, 498], [256, 14], [256, 498], [14, 256], [498, 256]]) {
       g.beginPath(); g.arc(x, y, 5, 0, Math.PI * 2); g.fill();
+    }
+  });
+}
+
+/** Ground steel plate, turned in circles on a lathe, with a ring painted round the middle. */
+function makeDaisTexture(): THREE.CanvasTexture {
+  return canvasTexture(512, (g) => {
+    g.fillStyle = '#6d7178';
+    g.fillRect(0, 0, 512, 512);
+    for (let r = 4; r < 256; r += 3) {
+      g.strokeStyle = `rgba(${Math.random() < 0.5 ? '255,255,255' : '0,0,0'},${0.03 + Math.random() * 0.05})`;
+      g.beginPath(); g.arc(256, 256, r, 0, Math.PI * 2); g.stroke();
+    }
+    g.strokeStyle = '#f2c200';
+    g.lineWidth = 10;
+    g.beginPath(); g.arc(256, 256, 70, 0, Math.PI * 2); g.stroke();
+    g.fillStyle = '#f2c200';
+    g.font = 'bold 44px sans-serif';
+    g.textAlign = 'center';
+    g.fillText('SUMO', 256, 272);
+  });
+}
+
+/** Plywood crate: grain, a darker frame round each face, stencilled lettering. */
+function makeCrateTexture(): THREE.CanvasTexture {
+  return canvasTexture(128, (g) => {
+    g.fillStyle = '#b98a52';
+    g.fillRect(0, 0, 128, 128);
+    for (let y = 0; y < 128; y += 3) { g.fillStyle = `rgba(90,55,20,${0.05 + Math.random() * 0.08})`; g.fillRect(0, y, 128, 1); }
+    g.strokeStyle = '#7a5530';
+    g.lineWidth = 12;
+    g.strokeRect(6, 6, 116, 116);
+    g.fillStyle = 'rgba(30,20,10,0.6)';
+    g.font = 'bold 20px sans-serif';
+    g.textAlign = 'center';
+    g.fillText('FRAGILE', 64, 70);
+  });
+}
+
+/** Start line (plain) or finish line (chequered), across the arena. */
+function makeLineTexture(chequered: boolean): THREE.CanvasTexture {
+  const t = canvasTexture(256, (g) => {
+    g.fillStyle = '#f4f4f0';
+    g.fillRect(0, 0, 256, 256);
+    if (!chequered) return;
+    g.fillStyle = '#111';
+    for (let x = 0; x < 8; x++) for (let y = 0; y < 2; y++) if ((x + y) % 2) g.fillRect(x * 32, y * 128, 32, 128);
+  });
+  t.wrapS = THREE.RepeatWrapping;
+  t.repeat.set(chequered ? 12 : 1, 1);
+  return t;
+}
+
+/** A classic black-and-white football, near enough: dark patches on white. */
+function makeBallTexture(): THREE.CanvasTexture {
+  return canvasTexture(256, (g) => {
+    g.fillStyle = '#f4f4f0';
+    g.fillRect(0, 0, 256, 256);
+    g.fillStyle = '#16181c';
+    for (let row = 0; row < 4; row++) {
+      for (let col = 0; col < 5; col++) {
+        const x = col * 51 + (row % 2) * 25 + 12, y = row * 64 + 32;
+        g.beginPath();
+        for (let k = 0; k < 5; k++) {
+          const a = (k / 5) * Math.PI * 2 - Math.PI / 2;
+          g.lineTo(x + Math.cos(a) * 13, y + Math.sin(a) * 13);
+        }
+        g.fill();
+      }
     }
   });
 }

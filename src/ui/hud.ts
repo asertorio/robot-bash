@@ -1,4 +1,5 @@
 import type { MatchView } from '../render/view';
+import { ARENA } from '../sim/arena';
 import { conditionLabel } from '../sim/damage';
 import type { Match } from '../sim/match';
 import type { Robot } from '../sim/robot';
@@ -38,9 +39,16 @@ export class Hud {
   private flashText = '';
   private flashUntil = -1;
   private finaleShown = false;
+  /** Football: the scoreboard, and goals already celebrated. */
+  private score: HTMLDivElement | null = null;
+  private goalsSeen = 0;
 
-  constructor(private match: Match, controllers: string[], onPause?: () => void) {
+  private camBtn: HTMLButtonElement | null = null;
+
+  constructor(private match: Match, controllers: string[], onPause?: () => void, onCamera?: () => void) {
     this.timer = h('div', { class: 'timer' }, '3:00');
+    this.score = match.event === 'football' ? h('div', { class: 'score' }) : null;
+    const clockBox = this.score ? h('div', { class: 'clockbox' }, this.timer, this.score) : this.timer;
     const boxes = match.competitors.map((r, i) => {
       const meta = h('div', { class: 'pmeta' });
       const gauges = h('div', { class: 'gauges' });
@@ -52,22 +60,31 @@ export class Hud {
       this.diagrams.push(diagram);
       return h('div', { class: `pbox${i % 2 ? ' right' : ''}`, style: `--pc:${PLAYER_COLOURS[i]}` },
         h('div', { class: 'pname' }, r.design.name),
-        h('div', { class: 'pmeta who' }, `P${i + 1} · ${controllers[i]}`),
+        h('div', { class: 'pmeta who' }, `P${i + 1} · ${controllers[i]}${match.event === 'football' ? ` · ${i % 2 ? 'Blue' : 'Red'} team` : ''}`),
         gauges, meta, diagram.el, report);
     });
     // Tab cycles the damage display; tapping this does too (no Tab key on a phone).
     this.help = h('button', { class: 'help', onclick: (e: Event) => { (e.currentTarget as HTMLElement).blur(); this.cycleReport(); } });
     const pause = onPause && h('button', { class: 'small pause', title: 'Pause (Esc, or Start on a pad)', onclick: (e: Event) => { (e.currentTarget as HTMLElement).blur(); onPause(); } }, '❚❚ Pause');
+    this.camBtn = onCamera ? h('button', { class: 'small cam', title: 'Switch camera (V, or Back on a pad)', onclick: (e: Event) => { (e.currentTarget as HTMLElement).blur(); onCamera(); } }, '🎥 TV') : null;
     this.big = h('div', { class: 'big' });
     this.feed = h('div', { class: 'feed' });
     this.tags = match.robots.map((r, i) => i < match.competitors.length
       ? h('div', { class: 'tag', style: `--pc:${PLAYER_COLOURS[i]}` }, `P${i + 1}`)
       : h('div', { class: 'tag house' }, r.design.name));
     this.el = h('div', { class: 'hud' },
-      h('div', { class: 'topbar' }, boxes[0], this.timer, boxes[1]),
+      // A melee stacks players 1 and 3 on the left, 2 and 4 on the right.
+      boxes.length > 2
+        ? h('div', { class: 'topbar melee' }, h('div', { class: 'pcol' }, boxes[0], boxes[2]), clockBox, h('div', { class: 'pcol' }, boxes[1], boxes[3]))
+        : h('div', { class: 'topbar' }, boxes[0], clockBox, boxes[1]),
       this.big, this.feed, ...this.tags,
-      h('div', { class: 'hud-corner' }, this.help, pause));
+      h('div', { class: 'hud-corner' }, this.help, this.camBtn, pause));
     this.applyReportMode();
+  }
+
+  /** Show which camera is on: a robot's name for the chase camera, null for TV. */
+  cameraLabel(robot: string | null) {
+    if (this.camBtn) this.camBtn.textContent = robot ? `🎥 ${robot}` : '🎥 TV';
   }
 
   /** A big hit just landed: shout about it. */
@@ -116,6 +133,11 @@ export class Hud {
     if (this.textClock > 0) return;
     this.textClock = 0.1;
 
+    if (this.score) {
+      const [r, b] = m.goals;
+      this.score.innerHTML = `<span class="red">RED ${r}</span> – <span class="blue">${b} BLUE</span>`;
+      if (r + b > this.goalsSeen) { this.goalsSeen = r + b; this.flashText = 'GOAL!'; this.flashUntil = m.time + 2; }
+    }
     if (m.phase === 'countdown') {
       this.timer.textContent = clock(m.duration);
       this.big.textContent = String(Math.ceil(-m.time));
@@ -128,7 +150,9 @@ export class Hud {
       this.big.classList.toggle('flash', m.time >= 1.2 && m.time < this.flashUntil);
     }
     m.competitors.forEach((r, i) => {
-      this.metas[i].innerHTML = this.instruments(r, m.eliminated[i]);
+      const g = ARENA.gauntlet;
+      const course = m.event === 'gauntlet' ? `Course <b>${Math.max(0, Math.min(100, Math.round((100 * (m.progress[i] - g.startZ)) / (g.finishZ - g.startZ))))}%</b><br>` : '';
+      this.metas[i].innerHTML = course + this.instruments(r, m.eliminated[i]);
       this.gaugeBoxes[i].replaceChildren(...(m.eliminated[i] ? [] : this.gauges(r)));
       if (this.reportMode !== 'off') this.diagrams[i].draw(r);
     });
