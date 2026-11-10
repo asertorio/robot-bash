@@ -333,3 +333,30 @@ input.code-input { font-family: var(--display); font-size: 32px; letter-spacing:
 .hud .score { font-family: var(--display); font-size: 20px; letter-spacing: 0.06em; background: var(--panel); padding: 3px 12px; border-radius: 3px; white-space: nowrap; }
 .hud .score .red { color: #e2412f; }
 .hud .score .blue { color: #3a8ee6; }
+
+/* Championship bracket */
+.bracket { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; width: min(980px, 100%); margin: 10px 0 14px; }
+.bcol { display: flex; flex-direction: column; justify-content: space-around; gap: 10px; }
+.bround { font-family: var(--display); text-transform: uppercase; letter-spacing: 0.08em; color: var(--hazard); text-align: center; }
+.bout { background: var(--panel); border: 2px solid var(--line); border-radius: 5px; padding: 6px 9px; font-size: 14px; }
+.bout > div:not(.bstate) { border-left: 4px solid var(--rc, transparent); padding-left: 6px; margin: 2px 0; }
+.bout .won { font-weight: 700; }
+.bout .lost { opacity: 0.45; text-decoration: line-through; }
+.bout .you { color: var(--hazard); }
+.bout.next { border-color: var(--hazard); box-shadow: 0 0 12px rgba(242, 194, 0, 0.35); }
+.bout.tbd { opacity: 0.35; }
+.bout .bstate { font-size: 11px; opacity: 0.7; margin-top: 3px; }
+.champion { text-align: center; font-family: var(--display); font-size: clamp(24px, 5vw, 40px); text-transform: uppercase; letter-spacing: 0.06em; }
+.champion .trophy { font-size: clamp(48px, 10vw, 90px); animation: trophy 1.6s ease-in-out infinite; }
+.champion.you { color: var(--hazard); }
+@keyframes trophy { 50% { transform: translateY(-8px) rotate(-4deg); } }
+
+/* The pit */
+.pit-time { position: relative; width: min(560px, 100%); height: 24px; border: 2px solid var(--line); border-radius: 4px; margin: 10px 0; overflow: hidden; }
+.pit-time .pit-bar { position: absolute; inset: 0 auto 0 0; background: var(--hazard); opacity: 0.6; }
+.pit-time span { position: relative; display: block; text-align: center; line-height: 20px; font-size: 13px; }
+.pit-list { width: min(560px, 100%); border-collapse: collapse; font-size: 14px; }
+.pit-list td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
+.pit-list tr.on { background: rgba(242, 194, 0, 0.08); }
+.pit-list tr.nofit { opacity: 0.4; }
+@media (max-width: 700px) { .bracket { grid-template-columns: 1fr; } }

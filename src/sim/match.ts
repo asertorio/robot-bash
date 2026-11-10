@@ -104,6 +104,12 @@ export interface MatchOptions {
   finale?: boolean;
   /** A side event instead of a fight (default 'fight'). */
   event?: GameEvent;
+  /**
+   * Damage carried in from an earlier fight (a championship): per competitor,
+   * each part's condition by index in `robot.parts` (see sim/tournament.ts).
+   * A part at 0 fails as the fight starts — it's missing, or dead.
+   */
+  wear?: Array<number[] | null | undefined>;
 }
 
 /** One robot's part grinding on another's: who, what, and how it's going. */
@@ -190,6 +196,15 @@ export class Match {
     this.breaks = opts.breaks ?? true;
     this.finale = opts.finale ?? false;
     for (const r of this.competitors) r.damageScale = this.damageScale;
+    opts.wear?.forEach((w, i) => {
+      const r = this.competitors[i];
+      if (!w || !r || w.length !== r.parts.length) return;
+      r.parts.forEach((p, k) => {
+        p.condition = Math.max(0, Math.min(1, w[k]));
+        // Already-known damage isn't news: only announce it getting worse.
+        p.announced = p.condition < 0.3 ? 0.3 : p.condition < 0.65 ? 0.65 : p.announced;
+      });
+    });
     this.houseRobots = (opts.house ?? []).slice(0, 4).map((d, k) => {
       const zone = HOUSE_CORNERS[k];
       const home = zoneCentre(zone);
@@ -612,8 +627,8 @@ export class Match {
         // The last one out is the story (in a melee, the earlier ones are history).
         const loser = this.competitors[this.outOrder[this.outOrder.length - 1]];
         const reason = !loser ? ''
-          : this.competitors.length > 2 ? `Last robot standing — ${loser.design.name} went ${this.eliminated[loser.index]}`
-          : `${loser.design.name} went ${this.eliminated[loser.index]}`;
+          : this.competitors.length > 2 ? `Last robot standing — ${outPhrase(loser.design.name, this.eliminated[loser.index])}`
+          : outPhrase(loser.design.name, this.eliminated[loser.index]);
         this.finish({ winner: winner ? winner.index : null, reason });
       } else if (this.time >= this.duration) {
         this.judge();
@@ -802,6 +817,9 @@ export class Match {
 }
 
 const TEAM = ['Red', 'Blue'];
+
+/** "Flipside was immobilised", "Whisk went into the pit". */
+const outPhrase = (name: string, how: string | null): string => (how === 'immobilised' ? `${name} was immobilised` : `${name} went ${how ?? 'out'}`);
 
 /**
  * Side events' starting places. Sumo: round the middle of the dais, facing

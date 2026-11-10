@@ -24,6 +24,10 @@ import { TouchControls, buttonLabel } from './ui/touch';
 import { SoundEngine } from './audio/sound';
 import { Commentator } from './audio/voice';
 import { REPLAY, ReplayPlayer, ReplayRecorder, type Clip } from './render/replay';
+import { Championship } from './ui/championship';
+import { BoutPool } from './workers/pool';
+import { PIT, ROUND_NAMES, cpuRepairs, pitList, repair, wearOf, type PitItem } from './sim/tournament';
+import { conditionLabel } from './sim/damage';
 import type { Robot } from './sim/robot';
 
 type Controller = 'Human' | 'CPU' | 'Remote';
@@ -84,6 +88,10 @@ class App {
   private replay: { player: ReplayPlayer; banner: HTMLElement; then: () => void } | null = null;
   /** A touch screen is in use: show on-screen controls where they're needed. */
   private net: NetSession | null = null;
+  /** A championship in progress, and whether the player's bout in it is on now. */
+  private champ: Championship | null = null;
+  private champPool: BoutPool | null = null;
+  private champFight = false;
   /** Who's driving each competitor in the fight that's on now. */
   private live: Controller[] = [];
   private touchSeen = window.matchMedia?.('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
@@ -364,6 +372,7 @@ class App {
       h('div', { class: 'tagline' }, 'Build it · Fight it · Break it'),
       h('div', { class: 'menu' },
         h('button', { class: 'primary', onclick: () => this.selectScreen() }, 'Fight'),
+        h('button', { onclick: () => this.champ ? this.bracketScreen() : this.championshipSetup() }, this.champ ? 'Championship (continue)' : 'Championship'),
         h('button', { onclick: () => this.onlineScreen() }, 'Play online'),
         h('button', { onclick: () => this.garageScreen() }, 'Garage'),
         h('button', { onclick: () => this.controlsScreen() }, 'Controls'),
@@ -609,6 +618,166 @@ class App {
     this.hud.cameraLabel(v.cameraMode === 'chase' ? m.competitors[v.followIndex].design.name : null);
   }
 
+  // ---------------------------------------------------------------- championship
+
+  private championshipSetup() {
+    this.screenKeys = (code) => { if (code === 'Escape') this.mainMenu(); };
+    this.input.mode = 'menu';
+    const roster = [...TEMPLATES, ...loadDesigns()];
+    let you = roster.find((d) => d.id === this.pickIds[0]) ?? roster[0];
+    let house = 2;
+    const render = () => {
+      const sel = h('select', { class: 'robot-pick', 'aria-label': 'Your robot', onchange: () => { you = roster.find((d) => d.id === sel.value) ?? you; this.pickIds[0] = you.id; render(); } },
+        ...roster.map((d) => h('option', { value: d.id, selected: d === you }, d.name)));
+      mount(this.ui, h('div', { class: 'screen top' },
+        h('h2', {}, 'Championship'),
+        h('div', { class: 'howto', style: 'max-width:600px' },
+          h('p', {}, 'Eight robots, one trophy. Quarter-final, semi-final, final — lose once and you\'re out.'),
+          h('p', {}, `Damage carries over. Between rounds you get ${PIT.minutes} minutes in the pit: every part takes its real swap time to fix, so choose what matters. The other teams do the same.`),
+          h('p', { class: 'hint' }, 'The bouts you\'re not in are fought for real, in the background, by CPU drivers — while you fight yours.')),
+        h('div', { class: 'house-row' }, h('span', {}, 'Your robot'), sel),
+        h('div', { class: 'desc', style: 'max-width:600px;text-align:center' }, you.description),
+        h('div', { class: 'house-row' }, h('span', {}, 'House robots'),
+          h('span', { class: 'seg' }, ...[0, 1, 2, 4].map((n) => h('button', { class: house === n ? 'on' : '', onclick: () => { house = n; render(); } }, n === 0 ? 'Off' : String(n))))),
+        h('div', { class: 'actions' },
+          h('button', { onclick: () => this.mainMenu() }, 'Back'),
+          h('button', { class: 'primary', onclick: () => this.startChampionship(you, house) }, 'Start the championship'))));
+    };
+    render();
+  }
+
+  private startChampionship(you: RobotDesign, house: number) {
+    this.endChampionship();
+    const field = TEMPLATES.filter((d) => d.id !== you.id).sort(() => Math.random() - 0.5).slice(0, 7);
+    const pool = new BoutPool();
+    this.champPool = pool;
+    this.champ = new Championship(you, field, house, pool, () => ({ ...this.fightOptions(false, house), event: 'fight' }));
+    this.champ.onChange = () => { if (this.ui.querySelector('.bracket')) this.bracketScreen(); };
+    this.bracketScreen();
+  }
+
+  private endChampionship() {
+    this.champPool?.dispose();
+    this.champPool = null;
+    this.champ = null;
+    this.champFight = false;
+  }
+
+  private bracketScreen() {
+    const c = this.champ;
+    if (!c) return this.mainMenu();
+    this.input.mode = 'menu';
+    const name = (e: number) => c.entrants[e].design.name;
+    const colour = (e: number) => c.entrants[e].design.colour;
+    const pair = c.playerPair();
+    const fight = () => { if (pair) this.champBout(pair); };
+    this.screenKeys = (code) => {
+      if (code === 'Escape') this.mainMenu();
+      if (code === 'Enter' && pair && !(document.activeElement instanceof HTMLButtonElement)) fight();
+    };
+    const columns = [0, 1, 2].map((ri) => {
+      const round = c.rounds[ri];
+      const slots = 4 >> ri;
+      return h('div', { class: 'bcol' }, h('div', { class: 'bround' }, ROUND_NAMES[ri]),
+        ...[...Array(slots).keys()].map((k) => {
+          const p = round?.pairs[k], res = round?.results[k];
+          if (!p) return h('div', { class: 'bout tbd' }, h('div', {}, '—'), h('div', {}, '—'));
+          const line = (e: number) => h('div', { class: `${res ? (res.winner === e ? 'won' : 'lost') : ''}${c.entrants[e].human ? ' you' : ''}`, style: `--rc:${colour(e)}` }, name(e), c.entrants[e].human ? ' (you)' : '');
+          const state = res ? res.reason : round.started[k] ? 'Fighting…' : 'Your bout';
+          return h('div', { class: `bout${!res && !round.started[k] ? ' next' : ''}` }, line(p[0]), line(p[1]), h('div', { class: 'bstate' }, state));
+        }));
+    });
+    const champ = c.champion;
+    const youWon = champ !== null && c.entrants[champ].human;
+    const waiting = !pair && champ === null;
+    mount(this.ui, h('div', { class: 'screen top' },
+      h('h2', {}, 'Championship'),
+      champ !== null && h('div', { class: `champion${youWon ? ' you' : ''}` },
+        h('div', { class: 'trophy' }, '🏆'),
+        h('div', {}, youWon ? 'You are the champion!' : `${name(champ)} is the champion`)),
+      h('div', { class: 'bracket' }, ...columns),
+      h('div', { class: 'hint', style: 'text-align:center' },
+        pair ? `Next: ${name(pair[0])} v ${name(pair[1])}${c.entrants[pair[1]].wear ? ' — they\'ve been patched up after their last fight' : ''}.`
+          : waiting ? (c.playerIn ? 'Waiting for the other bouts in this round to finish…' : 'You\'re out. The rest of the championship is being fought…') : ''),
+      h('div', { class: 'actions' },
+        h('button', { onclick: () => { if (champ !== null || confirm('Give up this championship?')) { this.endChampionship(); this.mainMenu(); } } }, champ !== null ? 'Done' : 'Quit championship'),
+        pair && h('button', { class: 'primary', onclick: fight }, `Fight ${name(pair[1])}! (Enter)`))));
+    if (youWon && !this.ui.querySelector('.champion.said')) {
+      this.ui.querySelector('.champion')?.classList.add('said');
+      this.voice.announce(`${name(champ)}, you are the champion!`);
+      this.sound.bigHit(6000);
+    }
+  }
+
+  /** The player's championship bout: [you, opponent] entrant indices. */
+  private champBout([you, opp]: [number, number]) {
+    const c = this.champ!;
+    const opts: MatchOptions = { ...this.fightOptions(false, c.houseCount), event: 'fight', wear: [c.entrants[you].wear, c.entrants[opp].wear] };
+    if (!this.beginMatch([c.entrants[you].design, c.entrants[opp].design], ['Human', 'CPU'], false, 0, opts)) return;
+    this.champFight = true;
+  }
+
+  /** Back from the player's bout: record it, then the pit if they won. */
+  private finishChampBout() {
+    const c = this.champ, m = this.match;
+    if (!c || !m || !this.champFight) return;
+    this.champFight = false;
+    const w = m.result?.winner;
+    const youWon = w === 0 || (w !== 1 && Math.random() < 0.5);
+    const reason = (m.result?.reason ?? '') + (w !== 0 && w !== 1 ? ' — decided on a coin toss' : '');
+    const wear = m.competitors.map(wearOf);
+    // Their pit crew gets to work if they won.
+    if (!youWon) wear[1] = repair(wear[1], cpuRepairs(pitList(m.competitors[1], wear[1])));
+    const items = youWon ? pitList(m.competitors[0], wear[0]) : [];
+    c.playerResult(youWon, reason, wear[0], wear[1]);
+    this.hud = null;
+    this.attract();
+    if (youWon && c.champion === null && items.length) this.pitScreen(items);
+    else this.bracketScreen();
+  }
+
+  private forfeitChampBout() {
+    const c = this.champ, m = this.match;
+    if (!c || !m) return;
+    this.champFight = false;
+    const wear = m.competitors.map(wearOf);
+    c.playerResult(false, `${m.competitors[0].design.name} conceded`, wear[0], wear[1]);
+    this.hud = null;
+    this.attract();
+    this.bracketScreen();
+  }
+
+  /** Between rounds: choose what to fix in the time there is. */
+  private pitScreen(items: PitItem[]) {
+    const c = this.champ!;
+    const you = c.entrants.findIndex((e) => e.human);
+    const chosen = new Set<PitItem>(cpuRepairs(items));
+    const done = () => {
+      c.entrants[you].wear = repair(c.entrants[you].wear ?? [], [...chosen]);
+      this.bracketScreen();
+    };
+    this.screenKeys = (code) => { if (code === 'Enter' && !(document.activeElement instanceof HTMLButtonElement)) done(); };
+    const render = () => {
+      const used = [...chosen].reduce((t, i) => t + i.minutes, 0);
+      mount(this.ui, h('div', { class: 'screen top' },
+        h('h2', {}, 'The pit'),
+        h('div', { class: 'hint', style: 'text-align:center' }, `${PIT.minutes} minutes until the next round. Tick what to fix — the crew has suggested the essentials. Anything left goes into the next fight as it is; a part at nothing won't be there at all.`),
+        h('div', { class: 'pit-time' }, h('div', { class: 'pit-bar', style: `width:${Math.min(100, (100 * used) / PIT.minutes)}%` }), h('span', {}, `${used} of ${PIT.minutes} min`)),
+        h('table', { class: 'pit-list' }, ...items.map((it) => {
+          const on = chosen.has(it);
+          const fits = on || used + it.minutes <= PIT.minutes;
+          const label = conditionLabel(it.condition);
+          return h('tr', { class: on ? 'on' : fits ? '' : 'nofit' },
+            h('td', {}, h('input', { type: 'checkbox', checked: on, disabled: !fits, onchange: () => { if (on) chosen.delete(it); else chosen.add(it); render(); } })),
+            h('td', {}, it.label),
+            h('td', { class: `cond-${label}` }, it.condition <= 0 ? 'Gone' : label),
+            h('td', {}, `${it.minutes} min`));
+        })),
+        h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: done }, 'Back to the bracket (Enter)'))));
+    };
+    render();
+  }
+
   // ---------------------------------------------------------------- online
 
   /** Host: a snapshot for the guest, NET_RATE times a second. */
@@ -808,7 +977,8 @@ class App {
     if (this.replay) { this.stopReplay(true); return; }
     // Result on screen: Enter is a rematch (online, only the host can start one).
     if (code === 'Enter' && this.resultShown && this.ui.querySelector('.overlay .winner') && !(document.activeElement instanceof HTMLButtonElement)) {
-      if (!this.net) this.fight();
+      if (this.champFight) this.finishChampBout();
+      else if (!this.net) this.fight();
       else if (this.net.link.role === 'host') this.hostFight();
       return;
     }
@@ -825,6 +995,16 @@ class App {
     this.input.mode = this.paused ? 'menu' : 'fight';
     this.ui.querySelector('.overlay')?.remove();
     if (!this.paused) return;
+    if (this.champFight) {
+      this.ui.append(h('div', { class: 'overlay' },
+        h('div', { class: 'dialog' },
+          h('h2', {}, 'Paused'),
+          h('div', { class: 'menu' },
+            h('button', { class: 'primary', onclick: () => this.togglePause() }, 'Resume'),
+            h('button', { onclick: () => { this.paused = false; this.sound.pause(false); this.forfeitChampBout(); } }, 'Concede the bout'),
+            h('button', { onclick: () => { this.champFight = false; this.leaveFight(() => this.mainMenu()); } }, 'Main menu (the championship waits)')))));
+      return;
+    }
     if (this.net) {
       // Online nothing stops: this is just a menu over the fight.
       this.ui.append(h('div', { class: 'overlay' },
@@ -933,6 +1113,7 @@ class App {
   }
 
   private resultButtons(): HTMLElement {
+    if (this.champFight) return h('div', { class: 'menu' }, h('button', { class: 'primary', onclick: () => this.finishChampBout() }, 'Continue (Enter)'));
     const net = this.net;
     if (net?.link.role === 'host') {
       return h('div', { class: 'menu' },

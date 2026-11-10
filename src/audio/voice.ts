@@ -108,6 +108,17 @@ export class Commentator {
     }
   }
 
+  /** Say something straight away, fight or no fight (the championship's result). */
+  announce(text: string) {
+    if (this.mode === 'off' || !this.synth) return;
+    this.stop();
+    const u = new SpeechSynthesisUtterance(text);
+    if (this.voice) u.voice = this.voice;
+    u.lang = this.voice?.lang ?? 'en-GB';
+    u.rate = VOICE.rate;
+    this.synth.speak(u);
+  }
+
   /** Something only the commentator says (not in the feed), e.g. over an action replay. */
   say(text: string) {
     if (this.mode === 'off' || !this.match) return;

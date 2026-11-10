@@ -469,6 +469,27 @@ use the same operator.
   life. (An optional "invert when flipped" transmitter switch is a candidate
   for later.)
 
+## Championship
+
+Eight robots (you plus seven random starters), a random draw, and a
+knockout: quarter-finals, semi-finals, the final. `src/sim/tournament.ts`
+has the rules, `src/ui/championship.ts` the bracket.
+
+- **Damage carries over.** After a bout each robot's part conditions are
+  kept (`wearOf`: anything that came off or failed is 0) and the next bout
+  starts from them (`MatchOptions.wear`). A part at 0 fails as the fight
+  starts: it's missing, or dead. Batteries are charged and gas refilled.
+- **The pit:** `PIT.minutes` (60) between rounds. Fixing a part takes its
+  catalogue swap time × how damaged it is (a wreck takes the full time; plate
+  25 min, electronics 15), × 1.2 for getting at it. You choose; CPU crews fix
+  what stops the robot first (radio, battery, wheels, weapon), then the worst
+  armour (`cpuRepairs`), and the crew's choice is pre-ticked for you.
+- **Other bouts are fought for real**, by two CPU drivers in an ordinary
+  Match, on Web Workers (`src/workers/`), one per spare core up to three, as
+  soon as their round begins, so they're usually done by the time you are.
+  A 30 s bout costs about 3.7 s of one core. A dead-level draw goes to a
+  coin toss. Without workers they run on the page.
+
 ## Side events
 
 Chosen on the select screen (Event: Fight / Sumo / Football); the rules
@@ -603,7 +624,8 @@ development.
    *Later:* wall spikes/grinders, house-robot weapons beyond lifters and
    spinners (crusher, flame thrower), and the pit being usable by house robots
    to finish victims.
-5. **Tournament:** heats → final, side events (sumo and football done in
+5. **Tournament:** a championship knockout with pit repairs is done (v0.9);
+   series of heats → final, side events (sumo and football done in
    v0.9; pinball, gauntlet, trials to come), pit repairs limited by time, budget and spares.
 6. **Campaign:** progression and unlocks; restricted weapons (fire, etc.) in
    special classes.
