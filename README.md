@@ -11,7 +11,7 @@ because something actually broke.
 install. Keyboard, gamepad or touch screen; two players on one machine, or you
 against the CPU.
 
-**Status: v0.7.** Fights in a hazard-filled arena, nineteen starter robots
+**Status: v0.7.** Fights in a hazard-filled arena, twenty-eight starter robots
 plus eight house robots to pick from, a CPU opponent that uses its weapons
 properly, and the **Garage**, where you build anything out of parts, joints
 and actuators and drive it in a test bay. Tournaments come next. See [docs/DESIGN.md](docs/DESIGN.md) for how the simulation works and
@@ -133,6 +133,14 @@ listed too.
 | Gemini | Twin counter-rotating saw discs | 76 kg |
 | Vicegrip | Hydraulic crusher, no gas, unlimited bites | 86 kg |
 | Whaler | Harpoon on 6 m of cable, and a winch to drag what it hits | 94 kg |
+| Bellringer | Shell spinner: a bell spinning round the body, skirt 25 mm off the floor | 83 kg |
+| Whisk | Eggbeater: a hollow cage of hardened bars, 2,800 rpm | 89 kg |
+| Flipflop | Invertible, with flippers at both ends | 74 kg |
+| Whippet | None — a tiny, very low wedge, the fastest robot here | 43 kg |
+| Haymaker | Spiked arm that swings sideways across the nose | 83 kg |
+| Conker | Flail spinner: spiked balls on chains | 84 kg |
+| Limpet | None — a round titanium cone, a wedge on every side | 66 kg |
+| Bearhug | Two arms that swing in, grab and hold on | 97 kg |
 
 **Open class:** **Bombard** fires 2 kg steel cannonballs — eight of them,
 one every 1.2 s. Little damage, but a real shove from across the arena.

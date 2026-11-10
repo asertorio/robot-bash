@@ -552,7 +552,12 @@ development.
    overpowered or mixed is chosen on the select screen or in Settings.
    **v0.8:** launchers — a gas cannon (Open class) and a harpoon gun with a
    winch, fired off the end of a ram so the physics sets muzzle speed and
-   recoil.
+   recoil. Eight more starters (`src/data/workshop.ts`), each a different way
+   to fight: a shell spinner (Bellringer), an eggbeater (Whisk), flippers at
+   both ends of an invertible body (Flipflop), a 43 kg LiPo dart (Whippet), a
+   ram-swung horizontal hammer (Haymaker), a flail spinner on ball joints
+   (Conker), a round 360° cone plough (Limpet) and a pair of servo hugging
+   arms (Bearhug).
    **v0.9:** sound, spoken commentary, a chase camera, 3–4 robot melees and
    online play between two devices.
    *Later:* wall spikes/grinders, house-robot weapons beyond lifters and
