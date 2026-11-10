@@ -23,6 +23,40 @@ export function steerTo(me: Robot, target: V3, maxThrottle = 1): { left: number;
 }
 
 /**
+ * Sumo: chase the foe, except near the edge of the dais with the foe further
+ * in — then head back towards the middle rather than get shoved off.
+ */
+export function sumoAim(me: Robot, foe: Robot | undefined, radius: number): V3 | null {
+  const d = Math.hypot(me.position.x, me.position.z);
+  const fd = foe ? Math.hypot(foe.position.x, foe.position.z) : 0;
+  if (d > radius - 0.6 && (!foe || fd < d + 0.2)) return { x: 0, y: me.position.y, z: 0 };
+  return null;
+}
+
+/** Sumo: near enough the edge that backing out of a shove would go over it. */
+export const nearDaisEdge = (me: Robot, radius: number): boolean => Math.hypot(me.position.x, me.position.z) > radius - 0.9;
+
+/**
+ * Football: get behind the ball (on the far side from the goal you're
+ * attacking) and drive through it. Coming from the wrong side, go round it
+ * on whichever side you're already on, rather than knocking it back.
+ */
+export function footballAim(me: Robot, ball: V3, goal: V3): V3 {
+  const toGoal = vsub({ x: goal.x, y: 0, z: goal.z }, { x: ball.x, y: 0, z: ball.z });
+  const dir = vscale(toGoal, 1 / (vlen(toGoal) || 1));
+  const rel = vsub({ x: me.position.x, y: 0, z: me.position.z }, { x: ball.x, y: 0, z: ball.z });
+  const along = vdot(rel, dir);
+  const side = { x: -dir.z, y: 0, z: dir.x };
+  const across = vdot(rel, side);
+  // Behind the ball and lined up: drive through it.
+  if (along < -0.25 && Math.abs(across) < 0.35 + -along * 0.25) return vadd(ball, vscale(dir, 0.6));
+  // Goal side of the ball: go round it.
+  if (along > -0.25) return vadd(vadd(ball, vscale(side, across >= 0 ? 0.9 : -0.9)), vscale(dir, -0.5));
+  // Otherwise get to the point behind it.
+  return vsub(ball, vscale(dir, 0.75));
+}
+
+/**
  * A simple CPU driver: chase, line up, use the weapon, don't drive into the
  * pit, back off when stuck. It drives through the same ControlState a human
  * does, so it is bound by the same physics.
@@ -51,13 +85,18 @@ export class CpuDriver {
     return this.foe;
   }
 
-  update(me: Robot, foe: Robot | undefined, pitOpen: boolean, dt: number): ControlState {
+  /**
+   * `aim` drives somewhere other than at the foe (a side event's tactics:
+   * see sumoAim, footballAim); `noReverse` stops it backing out of a shove
+   * (on the edge of the sumo dais that's suicide).
+   */
+  update(me: Robot, foe: Robot | undefined, pitOpen: boolean, dt: number, opts: { aim?: V3 | null; noReverse?: boolean } = {}): ControlState {
     const out: ControlState = { left: 0, right: 0, weapon: false, weapon2: false };
-    if (!foe) return out;
+    if (!foe && !opts.aim) return out;
     this.dt = dt;
 
     // Where is the target, in my own frame? (+z ahead, +x to my left.)
-    const target = foe.position;
+    const target = opts.aim ?? foe!.position;
     const inverted = me.uprightness < 0;
     const rel = qrotate(qconj(me.rotation), vsub(target, me.position));
     if (inverted) rel.x = -rel.x;
@@ -76,6 +115,7 @@ export class CpuDriver {
     // Unstick: pushing but going nowhere → reverse out for a moment.
     const v = me.chassis.linvel();
     const speed = Math.hypot(v.x, v.z);
+    if (opts.noReverse) this.reverseFor = 0;
     if (this.reverseFor > 0) {
       this.reverseFor -= dt;
       out.left = this.flank > 0 ? -0.9 : -0.35;
@@ -92,7 +132,7 @@ export class CpuDriver {
     }
 
     // A thwackbot's weapon is turning: close in, then spin on the spot.
-    if (me.design.style === 'thwack' && dist < 1.5) {
+    if (me.design.style === 'thwack' && dist < 1.5 && !opts.aim) {
       out.left = 1;
       out.right = -1;
       if (inverted) [out.left, out.right] = [-out.right, -out.left];
@@ -109,8 +149,8 @@ export class CpuDriver {
     return this.weapons(me, foe, out);
   }
 
-  private weapons(me: Robot, foe: Robot, out: ControlState): ControlState {
-    return this.arms.update(me, [foe], out, this.dt, { selfRight: true });
+  private weapons(me: Robot, foe: Robot | undefined, out: ControlState): ControlState {
+    return this.arms.update(me, foe ? [foe] : [], out, this.dt, { selfRight: true });
   }
 }
 

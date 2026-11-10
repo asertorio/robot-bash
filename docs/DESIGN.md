@@ -469,6 +469,28 @@ use the same operator.
   life. (An optional "invert when flipped" transmitter switch is a candidate
   for later.)
 
+## Side events
+
+Chosen on the select screen (Event: Fight / Sumo / Football); the rules
+are `GameEvent` in `src/sim/match.ts`, the geometry `ARENA.dais` and
+`ARENA.football` in `src/sim/arena.ts`.
+
+- **Sumo:** a fixed steel cylinder 2.3 m in radius and 0.3 m high in the
+  middle of the floor; robots start on it in a ring, facing in. A robot
+  whose chassis is past the edge and below the top is out ("off the
+  dais"); the usual count, pit and judges still apply. The CPU heads back
+  to the middle when it's near the edge with its foe further in, and never
+  reverses out of a shove within 0.9 m of the edge.
+- **Football:** a 1.6 kg, 0.22 m hollow plastic ball (restitution 0.55,
+  some rolling resistance) and a goal mouth 2.2 m wide against each end
+  wall. A goal is the ball's centre within 0.5 m of the end wall between the
+  posts; the ball then goes back to the centre (as it does if it's lost in
+  the pit or out of the arena). First to 3, else most goals at full time,
+  else a draw. In a melee P1 and P3 are red (defending −z), P2 and P4 blue.
+  The ball is debris for collisions, so kicking it does no damage. The CPU
+  gets behind the ball, on the far side from the goal it's attacking, and
+  drives through it (`footballAim`); from the wrong side it goes round.
+
 ## Camera
 
 The TV gantry camera frames every live competitor. The chase camera sits
@@ -581,8 +603,8 @@ development.
    *Later:* wall spikes/grinders, house-robot weapons beyond lifters and
    spinners (crusher, flame thrower), and the pit being usable by house robots
    to finish victims.
-5. **Tournament:** heats → final, side events (sumo, pinball, football,
-   gauntlet, trials), pit repairs limited by time, budget and spares.
+5. **Tournament:** heats → final, side events (sumo and football done in
+   v0.9; pinball, gauntlet, trials to come), pit repairs limited by time, budget and spares.
 6. **Campaign:** progression and unlocks; restricted weapons (fire, etc.) in
    special classes.
 7. **Full freedom:** AI-assisted design from a description or sketch (a model

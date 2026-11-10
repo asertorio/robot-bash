@@ -1,4 +1,5 @@
 import type { HouseSet } from './house';
+import type { GameEvent } from '../sim/match';
 
 export type SoundLevel = 'off' | 'quiet' | 'loud';
 export type CommentaryVoice = 'off' | 'highlights' | 'full';
@@ -34,6 +35,8 @@ export interface Settings {
   voice: CommentaryVoice;
   /** An action replay of the knockout or the biggest hit before the result. */
   replays: boolean;
+  /** What the select screen starts: a fight, sumo or football. */
+  event: GameEvent;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -50,6 +53,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sound: 'loud',
   voice: 'highlights',
   replays: true,
+  event: 'fight',
 };
 
 const KEY = 'robot-bash.settings.v1';

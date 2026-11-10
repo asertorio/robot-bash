@@ -6,9 +6,10 @@ import { CRASH_TEST_DUMMY, TEMPLATES, OPEN_CLASS } from './data/templates';
 import { describeBinding, loadProfiles, saveProfiles, type ControlProfile } from './input/bindings';
 import { InputManager } from './input/input';
 import { MatchView } from './render/view';
-import { CpuDriver } from './sim/ai';
+import { CpuDriver, footballAim, nearDaisEdge, sumoAim } from './sim/ai';
+import { ARENA } from './sim/arena';
 import type { RobotDesign } from './sim/design';
-import { BIG_HIT, Match, type MatchOptions } from './sim/match';
+import { BIG_HIT, Match, type GameEvent, type MatchOptions } from './sim/match';
 import { applyState, captureState, fromWire, toWire, type NetState } from './sim/netstate';
 import { NetLink, newRoomCode, type NetMessage } from './net/link';
 import type { ControlState } from './sim/control';
@@ -191,6 +192,7 @@ class App {
       damageScale: background ? 1 : damageScale(st),
       breaks: st.breaks,
       finale: !background && st.finale,
+      event: background ? 'fight' : st.event,
     };
   }
 
@@ -274,7 +276,14 @@ class App {
       const live = this.hud && !this.paused ? controls : [];
       const inputs = m.competitors.map((r, i) => {
         const cpu = this.cpus[i];
-        if (cpu) return cpu.update(r, cpu.chooseFoe(r, m.competitors.filter((_, j) => j !== i && !m.eliminated[j])), m.arena.pitOpen, dt);
+        if (cpu) {
+          // Football: go for the ball, not a robot (rivals are the other team).
+          const rivals = m.competitors.filter((_, j) => j !== i && !m.eliminated[j] && (m.event !== 'football' || j % 2 !== i % 2));
+          const foe = cpu.chooseFoe(r, rivals);
+          if (m.event === 'sumo') return cpu.update(r, foe, m.arena.pitOpen, dt, { aim: sumoAim(r, foe, ARENA.dais.radius), noReverse: nearDaisEdge(r, ARENA.dais.radius) });
+          if (m.event === 'football' && m.ball) return cpu.update(r, foe, m.arena.pitOpen, dt, { aim: footballAim(r, m.ball.translation(), { x: 0, y: 0, z: i % 2 === 0 ? ARENA.half : -ARENA.half }) });
+          return cpu.update(r, foe, m.arena.pitOpen, dt);
+        }
         if (this.live[i] === 'Remote') return net?.remote ?? IDLE;
         return live[i] ?? IDLE;
       });
@@ -452,11 +461,21 @@ class App {
       const sets: Array<[HouseSet, string]> = [['classic', 'Classic'], ['overpowered', 'Overpowered'], ['mixed', 'Mixed']];
       const setHouse = (v: HouseSet) => { this.settings.houseSet = v; saveSettings(this.settings); render(); };
       const setCount = (c: number) => { this.settings.robots = c; saveSettings(this.settings); render(); };
+      const setEvent = (e: GameEvent) => { this.settings.event = e; saveSettings(this.settings); render(); };
+      const ev = this.settings.event;
+      const eventHint: Record<GameEvent, string> = {
+        fight: 'Immobilise them, pit them, throw them out — or win on points.',
+        sumo: 'A raised steel dais in the middle of the arena. Push them off it (or watch them drive off) and they\'re out.',
+        football: `First to three goals. Push the ball into the far end's goal; you defend your own. ${n > 2 ? 'Teams: P1 and P3 red, P2 and P4 blue.' : 'Weapons allowed.'}`,
+      };
       mount(this.ui, h('div', { class: 'screen top' },
         h('h2', {}, 'Choose your robots'),
         h('div', { class: 'house-row', style: 'margin:0 0 14px' }, h('span', {}, 'Robots'),
           h('span', { class: 'seg' }, ...[2, 3, 4].map((c) => h('button', { class: n === c ? 'on' : '', onclick: () => setCount(c) }, c === 2 ? '1 v 1' : `${c}-way melee`))),
           h('span', { class: 'hint' }, n === 2 ? 'A straight duel.' : 'Everyone for themselves, like the first round of a heat: last robot standing wins, or the judges decide.')),
+        h('div', { class: 'house-row', style: 'margin:0 0 14px' }, h('span', {}, 'Event'),
+          h('span', { class: 'seg' }, ...([['fight', 'Fight'], ['sumo', 'Sumo'], ['football', 'Football']] as Array<[GameEvent, string]>).map(([e, label]) => h('button', { class: ev === e ? 'on' : '', onclick: () => setEvent(e) }, label))),
+          h('span', { class: 'hint' }, eventHint[ev])),
         h('div', { class: 'select-row' }, ...cards),
         h('div', { class: 'house-row' }, h('span', {}, 'House robots'),
           h('span', { class: 'seg' }, ...[0, 1, 2, 4].map((n) => h('button', { class: this.houseCount === n ? 'on' : '', onclick: () => { this.houseCount = n; render(); } }, n === 0 ? 'Off' : String(n)))),
@@ -712,7 +731,7 @@ class App {
     net.sentLines = 0;
     net.bigHits = [];
     net.impacts = [];
-    net.link.send({ type: 'start', designs, house: opts.house ?? [], duration: opts.duration ?? 180, damageScale: opts.damageScale ?? 1, breaks: opts.breaks ?? true, finale: opts.finale ?? false });
+    net.link.send({ type: 'start', designs, house: opts.house ?? [], duration: opts.duration ?? 180, damageScale: opts.damageScale ?? 1, breaks: opts.breaks ?? true, finale: opts.finale ?? false, event: opts.event ?? 'fight' });
   }
 
   private joinScreen(message = '') {
@@ -769,7 +788,7 @@ class App {
       let designs: RobotDesign[], house: RobotDesign[];
       try { designs = msg.designs.map(checkDesign); house = msg.house.map(checkDesign); } catch (e) { this.netLost(`Couldn't load the host's fight: ${(e as Error).message}`); return; }
       net.prev = net.latest = null;
-      this.beginMatch(designs, ['Remote', 'Human'], false, 0, { duration: msg.duration, house, damageScale: msg.damageScale, breaks: msg.breaks, finale: msg.finale });
+      this.beginMatch(designs, ['Remote', 'Human'], false, 0, { duration: msg.duration, house, damageScale: msg.damageScale, breaks: msg.breaks, finale: msg.finale, event: msg.event ?? 'fight' });
     } else if (msg.type === 'state') {
       const m = this.match;
       if (!m || !this.hud) return;

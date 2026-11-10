@@ -2,6 +2,7 @@ import Peer, { type DataConnection, type PeerOptions } from 'peerjs';
 import type { ControlState } from '../sim/control';
 import type { RobotDesign } from '../sim/design';
 import type { WireState } from '../sim/netstate';
+import type { GameEvent } from '../sim/match';
 
 /**
  * Two devices, one fight. A WebRTC data channel between the two browsers
@@ -15,7 +16,7 @@ import type { WireState } from '../sim/netstate';
 export type NetMessage =
   | { type: 'hello'; design: RobotDesign }
   | { type: 'lobby'; host: string; guest: string | null }
-  | { type: 'start'; designs: RobotDesign[]; house: RobotDesign[]; duration: number; damageScale: number; breaks: boolean; finale: boolean }
+  | { type: 'start'; designs: RobotDesign[]; house: RobotDesign[]; duration: number; damageScale: number; breaks: boolean; finale: boolean; event?: GameEvent }
   | { type: 'ctl'; c: ControlState }
   | { type: 'state'; s: WireState }
   | { type: 'leave' };

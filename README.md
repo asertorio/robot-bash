@@ -65,6 +65,13 @@ themselves, like the first round of a heat: last robot standing wins, or the
 judges score everyone. Players 3 and 4 drive with gamepads 3 and 4; any seat
 can be the CPU, which goes for whoever's nearest.
 
+**Side events:** *Sumo* (shove them off a raised steel dais) and *Football*
+(a real ball and a goal at each end; first to three, and in a 4-way it's
+P1 + P3 against P2 + P4). Pick the event on the select screen.
+
+**Action replays:** a knockout into the pit or over the wall, or the
+fight's biggest hit, plays again in slow motion before the result.
+
 **Online:** *Play online* on the main menu. One device hosts and shows a
 four-letter code; the other joins with it and picks any robot, even one from
 its own garage. The host's device runs the physics with its own Settings and

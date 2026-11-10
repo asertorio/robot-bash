@@ -38,11 +38,16 @@ export class Hud {
   private flashText = '';
   private flashUntil = -1;
   private finaleShown = false;
+  /** Football: the scoreboard, and goals already celebrated. */
+  private score: HTMLDivElement | null = null;
+  private goalsSeen = 0;
 
   private camBtn: HTMLButtonElement | null = null;
 
   constructor(private match: Match, controllers: string[], onPause?: () => void, onCamera?: () => void) {
     this.timer = h('div', { class: 'timer' }, '3:00');
+    this.score = match.event === 'football' ? h('div', { class: 'score' }) : null;
+    const clockBox = this.score ? h('div', { class: 'clockbox' }, this.timer, this.score) : this.timer;
     const boxes = match.competitors.map((r, i) => {
       const meta = h('div', { class: 'pmeta' });
       const gauges = h('div', { class: 'gauges' });
@@ -54,7 +59,7 @@ export class Hud {
       this.diagrams.push(diagram);
       return h('div', { class: `pbox${i % 2 ? ' right' : ''}`, style: `--pc:${PLAYER_COLOURS[i]}` },
         h('div', { class: 'pname' }, r.design.name),
-        h('div', { class: 'pmeta who' }, `P${i + 1} · ${controllers[i]}`),
+        h('div', { class: 'pmeta who' }, `P${i + 1} · ${controllers[i]}${match.event === 'football' ? ` · ${i % 2 ? 'Blue' : 'Red'} team` : ''}`),
         gauges, meta, diagram.el, report);
     });
     // Tab cycles the damage display; tapping this does too (no Tab key on a phone).
@@ -69,8 +74,8 @@ export class Hud {
     this.el = h('div', { class: 'hud' },
       // A melee stacks players 1 and 3 on the left, 2 and 4 on the right.
       boxes.length > 2
-        ? h('div', { class: 'topbar melee' }, h('div', { class: 'pcol' }, boxes[0], boxes[2]), this.timer, h('div', { class: 'pcol' }, boxes[1], boxes[3]))
-        : h('div', { class: 'topbar' }, boxes[0], this.timer, boxes[1]),
+        ? h('div', { class: 'topbar melee' }, h('div', { class: 'pcol' }, boxes[0], boxes[2]), clockBox, h('div', { class: 'pcol' }, boxes[1], boxes[3]))
+        : h('div', { class: 'topbar' }, boxes[0], clockBox, boxes[1]),
       this.big, this.feed, ...this.tags,
       h('div', { class: 'hud-corner' }, this.help, this.camBtn, pause));
     this.applyReportMode();
@@ -127,6 +132,11 @@ export class Hud {
     if (this.textClock > 0) return;
     this.textClock = 0.1;
 
+    if (this.score) {
+      const [r, b] = m.goals;
+      this.score.innerHTML = `<span class="red">RED ${r}</span> – <span class="blue">${b} BLUE</span>`;
+      if (r + b > this.goalsSeen) { this.goalsSeen = r + b; this.flashText = 'GOAL!'; this.flashUntil = m.time + 2; }
+    }
     if (m.phase === 'countdown') {
       this.timer.textContent = clock(m.duration);
       this.big.textContent = String(Math.ceil(-m.time));

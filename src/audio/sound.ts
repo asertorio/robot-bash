@@ -61,6 +61,7 @@ export class SoundEngine {
   private lastPit = false;
   private lastFlames = false;
   private lastOut = 0;
+  private lastGoals = 0;
   private level: SoundLevel = 'loud';
   private background = false;
 
@@ -119,6 +120,7 @@ export class SoundEngine {
     this.lastPit = m.arena.pitOpen;
     this.lastFlames = m.arena.flamesOn;
     this.lastOut = 0;
+    this.lastGoals = 0;
     this.excitement = 0;
     for (const r of m.robots) this.voices.push(this.makeVoice(r));
     if (!this.crowd) this.makeCrowd();
@@ -221,6 +223,10 @@ export class SoundEngine {
     if (this.lastPhase !== 'over' && m.phase === 'over' && this.lastPhase !== '') { this.buzzer(); this.excitement = 1; }
     if (!this.lastPit && m.arena.pitOpen) this.klaxon();
     this.lastPit = m.arena.pitOpen;
+    // Football: a goal gets the horn and the loudest cheer there is.
+    const goals = m.goals[0] + m.goals[1];
+    if (goals > this.lastGoals) { this.horn(); this.excitement = 1; }
+    this.lastGoals = goals;
     const outs = m.eliminated.filter(Boolean).length;
     if (outs > this.lastOut) this.excitement = 1;
     this.lastOut = outs;

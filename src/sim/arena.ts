@@ -1,5 +1,5 @@
 import RAPIER from '@dimforge/rapier3d-compat';
-import { ARENA_GROUPS } from './groups';
+import { ARENA_GROUPS, DEBRIS_GROUPS } from './groups';
 import { qaxis, type V3 } from './vmath';
 
 /** Arena layout. Shared by the simulation and the renderer. */
@@ -19,6 +19,14 @@ export const ARENA = {
   /** Grille that belches fire on a cycle. */
   flamePit: { x: 2.6, z: 2.4, half: 0.6, period: 7, burn: 2.2 },
   floorFriction: 1.0,
+  /** Sumo: a raised steel dais in the middle of the floor. Pushed off it, you're out. */
+  dais: { radius: 2.3, height: 0.3 },
+  /**
+   * Robot football: a light plastic ball, and a goal mouth against each
+   * end wall (z = ∓half). It's a goal when the ball's centre is within
+   * `depth` of the wall between the posts.
+   */
+  football: { ballRadius: 0.22, ballMass: 1.6, goalHalfWidth: 1.1, depth: 0.5 },
 };
 
 export interface Rect { x0: number; x1: number; z0: number; z1: number }
@@ -227,6 +235,52 @@ export class Arena {
   isInPit(p: V3): boolean {
     const { pit } = ARENA;
     return this.pitOpen && p.y < -0.2 && Math.abs(p.x - pit.x) < pit.half + 0.2 && Math.abs(p.z - pit.z) < pit.half + 0.2;
+  }
+
+  /** Sumo: raise the dais (once). */
+  addDais() {
+    const { radius, height } = ARENA.dais;
+    const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, height / 2, 0));
+    const c = this.world.createCollider(
+      RAPIER.ColliderDesc.cylinder(height / 2, radius).setFriction(ARENA.floorFriction)
+        .setFrictionCombineRule(RAPIER.CoefficientCombineRule.Multiply)
+        .setRestitution(0.05).setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Min)
+        .setCollisionGroups(ARENA_GROUPS),
+      body,
+    );
+    this.staticColliders.add(c.handle);
+  }
+
+  /** Sumo: off the dais — clear of its edge and below its top. */
+  isOffDais(p: V3): boolean {
+    const { radius, height } = ARENA.dais;
+    return Math.hypot(p.x, p.z) > radius + 0.05 && p.y < height - 0.05;
+  }
+
+  /**
+   * Robot football: the ball, a hollow plastic sphere. It's debris as far as
+   * collisions go: robots and the arena hit it, wheels' floor spheres don't
+   * (their cylinders do). Some rolling resistance, so it doesn't roll forever.
+   */
+  addBall(): RAPIER.RigidBody {
+    const f = ARENA.football;
+    const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(0, f.ballRadius + 0.01, 0)
+      .setLinearDamping(0.25).setAngularDamping(0.4).setCcdEnabled(true));
+    this.world.createCollider(
+      RAPIER.ColliderDesc.ball(f.ballRadius).setMass(f.ballMass).setFriction(0.6).setRestitution(0.55)
+        .setCollisionGroups(DEBRIS_GROUPS),
+      body,
+    );
+    return body;
+  }
+
+  /** Robot football: which end the ball is in the goal at (-1 is the −z end), or 0. */
+  goalAt(p: V3): -1 | 0 | 1 {
+    const f = ARENA.football;
+    if (Math.abs(p.x) > f.goalHalfWidth || p.y > 0.8) return 0;
+    if (p.z < -ARENA.half + f.depth) return -1;
+    if (p.z > ARENA.half - f.depth) return 1;
+    return 0;
   }
 
   isOutOfArena(p: V3): boolean {

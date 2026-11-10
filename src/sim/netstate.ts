@@ -48,6 +48,9 @@ export interface NetState {
   stats: Float32Array[];
   /** Trapdoor translation, floor flipper rotation. */
   arena: Float32Array;
+  /** Football: the ball's x y z qx qy qz qw, and the score. */
+  ball: number[] | null;
+  goals: [number, number];
 }
 
 /** A robot's distinct bodies, in part order (the same on both sides once the same parts are off). */
@@ -103,6 +106,8 @@ export function captureState(m: Match, commentaryFrom: number): NetState {
       ...r.flames.flatMap((f) => [f.on ? 1 : 0, f.fuel]),
     ])),
     arena: Float32Array.from([td.x, td.y, td.z, ff.x, ff.y, ff.z, ff.w]),
+    ball: m.ball ? (() => { const t = m.ball!.translation(), q = m.ball!.rotation(); return [t.x, t.y, t.z, q.x, q.y, q.z, q.w]; })() : null,
+    goals: [m.goals[0], m.goals[1]],
   };
 }
 
@@ -182,6 +187,13 @@ export function applyState(m: Match, s: NetState, prev: NetState | null = null, 
   const a = s.arena;
   m.arena.trapdoor.setTranslation({ x: a[0], y: a[1], z: a[2] }, false);
   m.arena.floorFlipper.setRotation({ x: a[3], y: a[4], z: a[5], w: a[6] }, false);
+  if (m.ball && s.ball) {
+    const b = s.ball, f = prev?.ball && alpha < 1 ? prev.ball : null;
+    const lerp = (k: number) => (f ? f[k] + (b[k] - f[k]) * alpha : b[k]);
+    m.ball.setTranslation({ x: lerp(0), y: lerp(1), z: lerp(2) }, false);
+    m.ball.setRotation({ x: b[3], y: b[4], z: b[5], w: b[6] }, false);
+  }
+  if (s.goals) m.goals = [s.goals[0], s.goals[1]];
 }
 
 /** NetState as plain JSON (typed arrays become number arrays), for the wire. */

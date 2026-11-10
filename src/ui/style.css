@@ -327,3 +327,9 @@ input.code-input { font-family: var(--display); font-size: 32px; letter-spacing:
 .replay-banner .rb-sub { position: absolute; left: 26px; top: calc(20px + clamp(34px, 7vw, 66px)); font-size: 16px; background: rgba(0,0,0,0.6); padding: 3px 10px; border-left: 4px solid var(--hazard); }
 .replay-banner .rb-skip { position: absolute; right: 20px; bottom: 16px; font-size: 13px; opacity: 0.7; }
 @keyframes rb-pulse { 50% { opacity: 0.55; } }
+
+/* Football scoreboard under the clock */
+.hud .clockbox { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.hud .score { font-family: var(--display); font-size: 20px; letter-spacing: 0.06em; background: var(--panel); padding: 3px 12px; border-radius: 3px; white-space: nowrap; }
+.hud .score .red { color: #e2412f; }
+.hud .score .blue { color: #3a8ee6; }

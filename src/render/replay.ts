@@ -32,6 +32,8 @@ export interface ReplayFrame {
   /** Per part (all robots, in order): x y z qx qy qz qw visible. */
   poses: Float32Array;
   impacts: Array<{ point: V3; energy: number }>;
+  /** Football: the ball's x y z qx qy qz qw. */
+  ball: number[] | null;
 }
 
 export interface Clip {
@@ -86,7 +88,9 @@ export class ReplayRecorder {
       const q = qmul(bq, v.rot);
       poses.set([pos.x, pos.y, pos.z, q.x, q.y, q.z, q.w, 1], i * 8);
     });
-    this.frames.push({ time: m.time, poses, impacts: this.pendingImpacts });
+    const bt = m.ball?.translation(), bq = m.ball?.rotation();
+    const ball = bt && bq ? [bt.x, bt.y, bt.z, bq.x, bq.y, bq.z, bq.w] : null;
+    this.frames.push({ time: m.time, poses, impacts: this.pendingImpacts, ball });
     this.pendingImpacts = [];
     const oldest = m.time - REPLAY.keep;
     while (this.frames.length && this.frames[0].time < oldest) this.frames.shift();
@@ -131,7 +135,7 @@ export class ReplayPlayer {
    * Advance; returns the poses to draw (blended between frames), the camera
    * target, and impacts reached since the last call (for sparks and clangs).
    */
-  advance(dt: number): { poses: Float32Array; target: V3; impacts: ReplayFrame['impacts'] } {
+  advance(dt: number): { poses: Float32Array; target: V3; impacts: ReplayFrame['impacts']; ball: { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number } | null } {
     this.t += dt * REPLAY.speed;
     const f = this.clip.frames;
     const at = f[0].time + this.t;
@@ -158,6 +162,8 @@ export class ReplayPlayer {
     const c = this.clip;
     const fo = c.follow !== null && c.follow >= 0 ? c.follow * 8 : -1;
     const target = fo >= 0 && poses[fo + 7] > 0 ? { x: poses[fo], y: poses[fo + 1], z: poses[fo + 2] } : c.point ?? { x: 0, y: 0, z: 0 };
-    return { poses, target, impacts };
+    const bb = (k < 0.5 ? a : b).ball;
+    const ball = bb ? { x: a.ball![0] + (b.ball![0] - a.ball![0]) * k, y: a.ball![1] + (b.ball![1] - a.ball![1]) * k, z: a.ball![2] + (b.ball![2] - a.ball![2]) * k, qx: bb[3], qy: bb[4], qz: bb[5], qw: bb[6] } : null;
+    return { poses, target, impacts, ball };
   }
 }

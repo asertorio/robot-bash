@@ -42,8 +42,11 @@ export class MatchView {
    */
   cameraMode: 'tv' | 'follow' | 'chase' = 'tv';
   /** Action replay: part poses to draw instead of the bodies' (see replay.ts), and the orbiting camera. */
-  private replay: { poses: Float32Array; target: V3; angle: number } | null = null;
+  private replay: { poses: Float32Array; target: V3; angle: number; ball: BallPose | null } | null = null;
   private partIndex = new Map<Part, number>();
+  /** Side events' scenery (the sumo dais, goal mouths) and the football. */
+  private eventGroup = new THREE.Group();
+  private ballMesh: THREE.Mesh | null = null;
   /** Chase camera's heading (world yaw), smoothed so a spin doesn't whip it round. */
   private chaseYaw = 0;
   followIndex = 0;
@@ -416,6 +419,7 @@ export class MatchView {
     this.blurDiscs = [];
     this.sparkData = [];
     this.replay = null;
+    this.buildEvent(match);
     this.partIndex = new Map(match.robots.flatMap((r) => r.parts).map((p, i) => [p, i]));
     for (const r of match.robots) {
       const first = this.partMeshes.length;
@@ -468,6 +472,12 @@ export class MatchView {
       const fq = m.arena.floorFlipper.rotation();
       this.floorFlipper.quaternion.set(fq.x, fq.y, fq.z, fq.w);
       this.syncFlames(m, dt);
+      if (this.ballMesh && m.ball) {
+        const rb = this.replay?.ball;
+        const t = rb ?? m.ball.translation(), q = rb ? { x: rb.qx, y: rb.qy, z: rb.qz, w: rb.qw } : m.ball.rotation();
+        this.ballMesh.position.set(t.x, t.y, t.z);
+        this.ballMesh.quaternion.set(q.x, q.y, q.z, q.w);
+      }
       this.syncCables(m);
       this.updateCamera(m, dt);
       this.applyShake(dt);
@@ -620,10 +630,10 @@ export class MatchView {
    * Show a replay frame (null: back to the live fight). The camera circles
    * the action slowly from low down, the way a floor-level camera operator would.
    */
-  setReplay(frame: { poses: Float32Array; target: V3 } | null) {
+  setReplay(frame: { poses: Float32Array; target: V3; ball?: BallPose | null } | null) {
     if (!frame) { this.replay = null; return; }
     const first = !this.replay;
-    this.replay = { poses: frame.poses, target: frame.target, angle: this.replay?.angle ?? Math.atan2(this.camPos.x - frame.target.x, this.camPos.z - frame.target.z) };
+    this.replay = { poses: frame.poses, target: frame.target, ball: frame.ball ?? null, angle: this.replay?.angle ?? Math.atan2(this.camPos.x - frame.target.x, this.camPos.z - frame.target.z) };
     if (first) this.camTarget.set(frame.target.x, frame.target.y, frame.target.z);
   }
 
@@ -640,6 +650,49 @@ export class MatchView {
     this.camPos.lerp(want, k);
     this.camera.position.copy(this.camPos);
     this.camera.lookAt(this.camTarget);
+  }
+
+  /**
+   * Scenery for a side event, drawn to the same sizes as its colliders
+   * (ARENA.dais, ARENA.football): the sumo dais is ground steel with a
+   * hazard-striped edge; football gets a ball and a painted goal mouth and
+   * goal board at each end, red's at −z and blue's at +z.
+   */
+  private buildEvent(m: Match) {
+    if (!this.eventGroup.parent) this.scene.add(this.eventGroup);
+    this.eventGroup.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      mesh.geometry?.dispose();
+      const mat = mesh.material as THREE.Material | undefined;
+      if (mat) { (mat as THREE.MeshStandardMaterial).map?.dispose(); mat.dispose(); }
+    });
+    this.eventGroup.clear();
+    this.ballMesh = null;
+    if (m.event === 'sumo') {
+      const { radius, height } = ARENA.dais;
+      const top = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, height, 72), [
+        new THREE.MeshStandardMaterial({ map: makeStripeTexture(), metalness: 0.4, roughness: 0.5 }),
+        new THREE.MeshStandardMaterial({ map: makeDaisTexture(), metalness: 0.75, roughness: 0.38 }),
+        new THREE.MeshStandardMaterial({ color: 0x111111 }),
+      ]);
+      top.position.y = height / 2;
+      top.receiveShadow = top.castShadow = true;
+      this.eventGroup.add(top);
+    }
+    if (m.event === 'football') {
+      const f = ARENA.football;
+      this.ballMesh = new THREE.Mesh(new THREE.IcosahedronGeometry(f.ballRadius, 3), new THREE.MeshStandardMaterial({ map: makeBallTexture(), roughness: 0.45, metalness: 0 }));
+      this.ballMesh.castShadow = true;
+      this.eventGroup.add(this.ballMesh);
+      for (const [end, colour] of [[-1, 0xe2412f], [1, 0x3a8ee6]] as const) {
+        const mouth = new THREE.Mesh(new THREE.PlaneGeometry(f.goalHalfWidth * 2, f.depth), new THREE.MeshStandardMaterial({ color: colour, transparent: true, opacity: 0.45, roughness: 0.8 }));
+        mouth.rotation.x = -Math.PI / 2;
+        mouth.position.set(0, 0.004, end * (ARENA.half - f.depth / 2));
+        const board = new THREE.Mesh(new THREE.PlaneGeometry(f.goalHalfWidth * 2, ARENA.wallHeight * 0.9), new THREE.MeshStandardMaterial({ color: colour, emissive: colour, emissiveIntensity: 0.35, side: THREE.DoubleSide }));
+        board.position.set(0, ARENA.wallHeight * 0.48, end * (ARENA.half - 0.005));
+        this.eventGroup.add(mouth, board);
+      }
+    }
   }
 
   /** Put the chase camera behind robot `index`, already facing its way. */
@@ -781,6 +834,9 @@ export class MatchView {
   }
 }
 
+/** The football's pose in a replay frame. */
+export interface BallPose { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number }
+
 export interface GizmoOptions {
   /** A part of robot 0. */
   partId: string;
@@ -864,6 +920,45 @@ function makeFloorTexture(): THREE.CanvasTexture {
     g.fillStyle = '#25272a';
     for (const [x, y] of [[14, 14], [498, 14], [14, 498], [498, 498], [256, 14], [256, 498], [14, 256], [498, 256]]) {
       g.beginPath(); g.arc(x, y, 5, 0, Math.PI * 2); g.fill();
+    }
+  });
+}
+
+/** Ground steel plate, turned in circles on a lathe, with a ring painted round the middle. */
+function makeDaisTexture(): THREE.CanvasTexture {
+  return canvasTexture(512, (g) => {
+    g.fillStyle = '#6d7178';
+    g.fillRect(0, 0, 512, 512);
+    for (let r = 4; r < 256; r += 3) {
+      g.strokeStyle = `rgba(${Math.random() < 0.5 ? '255,255,255' : '0,0,0'},${0.03 + Math.random() * 0.05})`;
+      g.beginPath(); g.arc(256, 256, r, 0, Math.PI * 2); g.stroke();
+    }
+    g.strokeStyle = '#f2c200';
+    g.lineWidth = 10;
+    g.beginPath(); g.arc(256, 256, 70, 0, Math.PI * 2); g.stroke();
+    g.fillStyle = '#f2c200';
+    g.font = 'bold 44px sans-serif';
+    g.textAlign = 'center';
+    g.fillText('SUMO', 256, 272);
+  });
+}
+
+/** A classic black-and-white football, near enough: dark patches on white. */
+function makeBallTexture(): THREE.CanvasTexture {
+  return canvasTexture(256, (g) => {
+    g.fillStyle = '#f4f4f0';
+    g.fillRect(0, 0, 256, 256);
+    g.fillStyle = '#16181c';
+    for (let row = 0; row < 4; row++) {
+      for (let col = 0; col < 5; col++) {
+        const x = col * 51 + (row % 2) * 25 + 12, y = row * 64 + 32;
+        g.beginPath();
+        for (let k = 0; k < 5; k++) {
+          const a = (k / 5) * Math.PI * 2 - Math.PI / 2;
+          g.lineTo(x + Math.cos(a) * 13, y + Math.sin(a) * 13);
+        }
+        g.fill();
+      }
     }
   });
 }
