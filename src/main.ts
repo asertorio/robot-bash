@@ -22,6 +22,7 @@ import { Hud, PLAYER_COLOURS } from './ui/hud';
 import { TouchControls, buttonLabel } from './ui/touch';
 import { SoundEngine } from './audio/sound';
 import { Commentator } from './audio/voice';
+import { REPLAY, ReplayPlayer, ReplayRecorder, type Clip } from './render/replay';
 import type { Robot } from './sim/robot';
 
 type Controller = 'Human' | 'CPU' | 'Remote';
@@ -77,6 +78,9 @@ class App {
   private touch = new TouchControls();
   private sound = new SoundEngine();
   private voice = new Commentator();
+  private recorder = new ReplayRecorder();
+  /** An action replay on screen, and the banner over it. */
+  private replay: { player: ReplayPlayer; banner: HTMLElement; then: () => void } | null = null;
   /** A touch screen is in use: show on-screen controls where they're needed. */
   private net: NetSession | null = null;
   /** Who's driving each competitor in the fight that's on now. */
@@ -212,6 +216,8 @@ class App {
     this.live = controllers;
     this.cpus = controllers.map((c) => (c === 'CPU' ? new CpuDriver() : null));
     this.view.setMatch(this.match);
+    this.stopReplay();
+    this.recorder.reset(background ? null : this.match);
     this.sound.setMatch(this.match, background);
     this.voice.setMatch(background ? null : this.match);
     this.paused = false;
@@ -276,6 +282,7 @@ class App {
           if (this.settings.shake) this.view.shake(Math.min(1, hit.energy / 8000));
           this.hud.bigHit(hit.energy);
           this.sound.bigHit(hit.energy);
+          this.recorder.bigHit(m.time, hit.energy, hit.point);
           if (!net && this.settings.slowMotion && hit.energy > BIG_HIT * 2 && m.time - this.lastSlowmo > 4) { this.slowmo = 0.9; this.lastSlowmo = m.time; }
         }
       }
@@ -290,6 +297,8 @@ class App {
       if (!this.hud && (m.phase === 'over' || m.time > 60)) this.attract();
       if (this.hud && m.result && !this.resultShown && m.time > 0) this.showResultSoon();
     }
+    if (m && this.replay) this.playReplay(m, dt);
+    else if (m && this.hud && !this.garage) this.recorder.record(m);
     if (m && (!this.paused || this.net)) this.sound.update(m, dt, this.view.camera.position);
     this.voice.update();
     this.view.render(this.paused && !this.net ? 0 : dt);
@@ -497,6 +506,7 @@ class App {
         row('Sound', 'sound', [['loud', 'Loud'], ['quiet', 'Quiet'], ['off', 'Off']], 'Motors, spinners, impacts, pneumatics and the crowd — all made from what the physics is doing.'),
         row('Commentary voice', 'voice', [['highlights', 'Big moments'], ['full', 'Everything'], ['off', 'Off']], this.voice.available ? 'A spoken commentator, using your browser\'s voice. Big moments: knock-outs, big hits, the clock. Everything: every line in the feed, and some colour.' : 'Your browser has no speech voice, so the commentary is text only.'),
         row('Slow motion', 'slowMotion', onOff, 'Time slows for a moment after a really big hit.'),
+        row('Action replays', 'replays', onOff, 'Before the result: the knockout (into the pit, over the wall) or the fight\'s biggest hit again, in slow motion.'),
         row('Camera shake', 'shake', onOff, 'The camera shakes on big hits.'),
         row('Fight camera', 'camera', [['tv', 'TV gantry'], ['chase', 'Behind your robot']], 'Where the camera starts. Press V (or Back on a pad, or the camera button) mid-fight to switch between the TV view and behind each robot.'),
         row('Touch stick', 'stick', [['point', 'Point to drive'], ['robot', 'Robot\'s view']], 'Phones and tablets. Point to drive: the robot goes the way you push the stick on screen. Robot\'s view: up is the robot\'s forward and sideways steers, like an RC transmitter.')),
@@ -774,6 +784,7 @@ class App {
   }
 
   private fightKeys(code: string) {
+    if (this.replay) { this.stopReplay(true); return; }
     // Result on screen: Enter is a rematch (online, only the host can start one).
     if (code === 'Enter' && this.resultShown && this.ui.querySelector('.overlay .winner') && !(document.activeElement instanceof HTMLButtonElement)) {
       if (!this.net) this.fight();
@@ -824,7 +835,59 @@ class App {
 
   private showResultSoon() {
     this.resultShown = true;
-    setTimeout(() => this.showResult(), 2500);
+    const m = this.match;
+    setTimeout(() => {
+      // Still the same fight (not a rematch or a quit in the meantime)?
+      if (this.match !== m || !this.hud) return;
+      const clip = this.settings.replays ? this.pickClip() : null;
+      if (clip) this.startReplay(clip, () => this.showResult());
+      else this.showResult();
+    }, clipDelay(this.settings.replays));
+  }
+
+  /** The moment worth seeing again: a robot going in the pit or over the wall, else the biggest hit. */
+  private pickClip(): Clip | null {
+    const m = this.match!;
+    const out = m.outOrder[m.outOrder.length - 1];
+    const how = out !== undefined ? m.eliminated[out] : null;
+    if (how === 'into the pit' || how === 'out of the arena') {
+      const clip = this.recorder.last(REPLAY.knockout, this.recorder.chassisIndex(m, out), `${m.competitors[out].design.name} goes ${how}`);
+      if (clip) return clip;
+    }
+    const best = this.recorder.bestHit();
+    return best ? { ...best, title: `The biggest hit · ${(best.energy / 1000).toFixed(1)} kJ` } : null;
+  }
+
+  private startReplay(clip: Clip, then: () => void) {
+    this.stopReplay();
+    const banner = h('div', { class: 'replay-banner', onclick: () => this.stopReplay(true) },
+      h('div', { class: 'rb-title' }, 'Action replay'),
+      h('div', { class: 'rb-sub' }, clip.title),
+      h('div', { class: 'rb-skip' }, this.touchSeen ? 'Tap to skip' : 'Any key to skip'));
+    this.ui.append(banner);
+    if (this.hud) this.hud.el.style.visibility = 'hidden';
+    this.replay = { player: new ReplayPlayer(clip), banner, then };
+    this.voice.say(['Let\'s see that again!', 'Here it is again, in slow motion.', 'Watch this!'][Math.floor(Math.random() * 3)]);
+  }
+
+  private playReplay(m: Match, dt: number) {
+    const rp = this.replay!;
+    const frame = rp.player.advance(dt);
+    this.view.setReplay(frame);
+    // Sparks and clangs as the hits come round again.
+    for (const i of frame.impacts) if (m.impacts.length < 48) m.impacts.push(i);
+    if (rp.player.done) this.stopReplay(true);
+  }
+
+  /** End a replay; `next` runs what was waiting for it (the result). */
+  private stopReplay(next = false) {
+    const rp = this.replay;
+    if (!rp) return;
+    this.replay = null;
+    rp.banner.remove();
+    this.view.setReplay(null);
+    if (this.hud) this.hud.el.style.visibility = '';
+    if (next) rp.then();
   }
 
   private showResult() {
@@ -867,5 +930,8 @@ class App {
       h('button', { onclick: () => this.leaveFight(() => this.mainMenu()) }, 'Main menu'));
   }
 }
+
+/** How long after the fight's decided until the replay (or the result) comes up, ms. */
+const clipDelay = (replays: boolean) => (replays ? 1400 : 2500);
 
 RAPIER.init().then(() => new App().start());

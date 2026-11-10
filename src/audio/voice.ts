@@ -108,6 +108,12 @@ export class Commentator {
     }
   }
 
+  /** Something only the commentator says (not in the feed), e.g. over an action replay. */
+  say(text: string) {
+    if (this.mode === 'off' || !this.match) return;
+    this.queue(text, 'major', this.match.time);
+  }
+
   private queue(text: string, level: CommentaryLine['level'], time: number) {
     // Never let a minor line bump a major one waiting to be said.
     if (this.pending && this.pending.level === 'major' && level !== 'major') return;

@@ -320,3 +320,10 @@ body.touch .hud .hud-corner { bottom: auto; top: 76px; right: 50%; transform: tr
 .room-code { font-family: var(--display); font-size: clamp(56px, 14vw, 120px); letter-spacing: 0.25em; color: var(--hazard); text-align: center; margin: 4px 0 6px; padding-left: 0.25em; }
 input.code-input { font-family: var(--display); font-size: 32px; letter-spacing: 0.3em; width: 6.5em; text-transform: uppercase; text-align: center; }
 .screen .house-row select.robot-pick { max-width: 70vw; }
+
+/* Action replay: a broadcast-style caption over the slowed-down clip. */
+.replay-banner { position: absolute; inset: 0; z-index: 5; cursor: pointer; pointer-events: auto; }
+.replay-banner .rb-title { position: absolute; left: 24px; top: 20px; font-family: var(--display); font-size: clamp(28px, 6vw, 56px); text-transform: uppercase; letter-spacing: 0.08em; color: var(--hazard); text-shadow: 0 2px 12px #000; animation: rb-pulse 1.2s ease-in-out infinite; }
+.replay-banner .rb-sub { position: absolute; left: 26px; top: calc(20px + clamp(34px, 7vw, 66px)); font-size: 16px; background: rgba(0,0,0,0.6); padding: 3px 10px; border-left: 4px solid var(--hazard); }
+.replay-banner .rb-skip { position: absolute; right: 20px; bottom: 16px; font-size: 13px; opacity: 0.7; }
+@keyframes rb-pulse { 50% { opacity: 0.55; } }

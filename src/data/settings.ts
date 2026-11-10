@@ -32,6 +32,8 @@ export interface Settings {
   sound: SoundLevel;
   /** Spoken commentary: off, big moments only, or everything. */
   voice: CommentaryVoice;
+  /** An action replay of the knockout or the biggest hit before the result. */
+  replays: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -47,6 +49,7 @@ export const DEFAULT_SETTINGS: Settings = {
   camera: 'tv',
   sound: 'loud',
   voice: 'highlights',
+  replays: true,
 };
 
 const KEY = 'robot-bash.settings.v1';

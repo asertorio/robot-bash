@@ -4,6 +4,7 @@ import { ARENA, arenaBoxes, flamePitRect } from '../sim/arena';
 import { partFrames, subtree } from '../sim/assembly';
 import type { Match } from '../sim/match';
 import type { Part, Robot } from '../sim/robot';
+import type { V3 } from '../sim/vmath';
 import { MechanismView } from './mechanisms';
 import { buildPartMesh } from './partMesh';
 import { setWear } from './surfaces';
@@ -40,6 +41,9 @@ export class MatchView {
    * 'chase' sits a little behind and above one robot, looking where it's going.
    */
   cameraMode: 'tv' | 'follow' | 'chase' = 'tv';
+  /** Action replay: part poses to draw instead of the bodies' (see replay.ts), and the orbiting camera. */
+  private replay: { poses: Float32Array; target: V3; angle: number } | null = null;
+  private partIndex = new Map<Part, number>();
   /** Chase camera's heading (world yaw), smoothed so a spin doesn't whip it round. */
   private chaseYaw = 0;
   followIndex = 0;
@@ -411,6 +415,8 @@ export class MatchView {
     this.mechanisms = [];
     this.blurDiscs = [];
     this.sparkData = [];
+    this.replay = null;
+    this.partIndex = new Map(match.robots.flatMap((r) => r.parts).map((p, i) => [p, i]));
     for (const r of match.robots) {
       const first = this.partMeshes.length;
       for (const part of r.parts) {
@@ -475,14 +481,24 @@ export class MatchView {
     for (const pm of this.partMeshes) {
       const { part, mesh, mats } = pm;
       const b = part.body, v = part.visual;
-      // Spare rounds wait in the magazine on disabled bodies: not drawn till loaded.
-      if (!b || !v || !part.collider || !b.isEnabled()) { mesh.visible = false; continue; }
-      mesh.visible = true;
-      // Body pose × the part's pose on that body.
-      const bp = b.translation(), bq = b.rotation();
-      const q = new THREE.Quaternion(bq.x, bq.y, bq.z, bq.w);
-      mesh.position.set(v.pos.x, v.pos.y, v.pos.z).applyQuaternion(q).add(new THREE.Vector3(bp.x, bp.y, bp.z));
-      mesh.quaternion.copy(q).multiply(new THREE.Quaternion(v.rot.x, v.rot.y, v.rot.z, v.rot.w));
+      const rp = this.replay;
+      if (rp) {
+        // Replay: the recorded world pose, whatever has happened since.
+        const o = (this.partIndex.get(part) ?? -1) * 8;
+        if (o < 0 || rp.poses[o + 7] <= 0) { mesh.visible = false; continue; }
+        mesh.visible = true;
+        mesh.position.set(rp.poses[o], rp.poses[o + 1], rp.poses[o + 2]);
+        mesh.quaternion.set(rp.poses[o + 3], rp.poses[o + 4], rp.poses[o + 5], rp.poses[o + 6]);
+      } else {
+        // Spare rounds wait in the magazine on disabled bodies: not drawn till loaded.
+        if (!b || !v || !part.collider || !b.isEnabled()) { mesh.visible = false; continue; }
+        mesh.visible = true;
+        // Body pose × the part's pose on that body.
+        const bp = b.translation(), bq = b.rotation();
+        const q = new THREE.Quaternion(bq.x, bq.y, bq.z, bq.w);
+        mesh.position.set(v.pos.x, v.pos.y, v.pos.z).applyQuaternion(q).add(new THREE.Vector3(bp.x, bp.y, bp.z));
+        mesh.quaternion.copy(q).multiply(new THREE.Quaternion(v.rot.x, v.rot.y, v.rot.z, v.rot.w));
+      }
       mesh.scale.set(1, 1, 1);
       const pv = this.preview;
       if (pv && part.def && m.robots[0].parts.includes(part)) {
@@ -503,9 +519,11 @@ export class MatchView {
         mat.emissive.setHex(glow);
       }
     }
-    for (const mech of this.mechanisms) mech.update();
+    // Rams, motors and spinner blur follow the live bodies: hidden in a replay.
+    for (const mech of this.mechanisms) { mech.group.visible = !this.replay; if (!this.replay) mech.update(); }
     for (const { robot, index, mesh } of this.blurDiscs) {
       const rot = robot.rotors()[index];
+      if (this.replay) { mesh.visible = false; continue; }
       if (!rot || !rot.actuator.child.joint) { mesh.visible = false; continue; }
       mesh.position.set(rot.centre.x, rot.centre.y, rot.centre.z);
       // Circle geometry faces +Z; turn it to face along the spin axis.
@@ -598,6 +616,32 @@ export class MatchView {
     this.flames.geometry.attributes.position.needsUpdate = true;
   }
 
+  /**
+   * Show a replay frame (null: back to the live fight). The camera circles
+   * the action slowly from low down, the way a floor-level camera operator would.
+   */
+  setReplay(frame: { poses: Float32Array; target: V3 } | null) {
+    if (!frame) { this.replay = null; return; }
+    const first = !this.replay;
+    this.replay = { poses: frame.poses, target: frame.target, angle: this.replay?.angle ?? Math.atan2(this.camPos.x - frame.target.x, this.camPos.z - frame.target.z) };
+    if (first) this.camTarget.set(frame.target.x, frame.target.y, frame.target.z);
+  }
+
+  private replayCamera(dt: number) {
+    const r = this.replay!;
+    r.angle += dt * 0.35;
+    const t = new THREE.Vector3(r.target.x, Math.max(0, r.target.y) + 0.15, r.target.z);
+    const want = t.clone().add(new THREE.Vector3(Math.sin(r.angle) * 2.6, 0.75, Math.cos(r.angle) * 2.6));
+    const lim = ARENA.half + 1.2;
+    want.x = Math.max(-lim, Math.min(lim, want.x));
+    want.z = Math.max(-lim, Math.min(lim, want.z));
+    const k = 1 - Math.exp(-dt * 3);
+    this.camTarget.lerp(t, k);
+    this.camPos.lerp(want, k);
+    this.camera.position.copy(this.camPos);
+    this.camera.lookAt(this.camTarget);
+  }
+
   /** Put the chase camera behind robot `index`, already facing its way. */
   startChase(index: number) {
     this.cameraMode = 'chase';
@@ -638,6 +682,7 @@ export class MatchView {
       }
       return;
     }
+    if (this.replay) { this.replayCamera(dt); return; }
     if (this.cameraMode === 'chase' && m.robots[this.followIndex]) {
       this.chaseCamera(m.robots[this.followIndex], dt);
       return;

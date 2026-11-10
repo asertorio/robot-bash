@@ -474,6 +474,19 @@ hangs out over the (low) wall and rises to look over it. Settings → Fight came
 the camera button cycles TV → behind each robot (humans first). Point-to-drive
 on a touch screen is relative to whichever camera is on.
 
+## Action replays
+
+Before the result, the moment worth seeing again plays back at 0.4× from a
+low camera circling the action: a robot going into the pit or over the
+wall (the last 4 s, following it), otherwise the fight's biggest hit (2.2 s
+before to 1.4 s after). `src/render/replay.ts` records every part's world
+pose 30 times a second of match time for the last 10 s; playback only
+changes what's drawn (the view takes poses from the frame, not the bodies),
+so the simulation is never touched, and a part that has since come off is
+shown still bolted on. Sparks and clangs come round again with the hits.
+Rams, motors and spinner blur are hidden during a replay (they follow the
+live bodies). Any key or a tap skips. Settings → Action replays.
+
 ## Sound and commentary
 
 `src/audio/sound.ts` synthesises everything with Web Audio from what the
